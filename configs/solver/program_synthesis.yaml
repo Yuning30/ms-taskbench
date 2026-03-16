@@ -1,0 +1,15 @@
+# @package _global_
+run:
+  solver: program_synthesis
+  solver_kwargs:
+    # Number of instruction slots in the initial program.
+    # All slots start as "skip" and can be rewritten by the synthesis algorithm.
+    program_length: 3
+
+env:
+  env_id: StackNCube-v1
+  control_mode: pd_joint_pos
+  num_envs: 1
+  reward_mode: sparse
+  num_cubes: 3
+
