@@ -55,6 +55,18 @@ def build_action(env, qpos, gripper_state, qvel=None):
         if qvel is None:
             qvel = qpos * 0
         return np.hstack([qpos, qvel, gripper_state])
+    if control_mode == "pd_ee_delta_pose":
+        # [dx, dy, dz, droll, dpitch, dyaw, gripper]
+        arr = np.asarray(qpos, dtype=np.float64).flatten()
+        if arr.shape[0] != 6:
+            raise ValueError(f"pd_ee_delta_pose expects 6-dim delta action, got {arr.shape[0]}")
+        return np.hstack([arr, gripper_state])
+    if control_mode == "pd_ee_delta_pos":
+        # [dx, dy, dz, gripper]
+        arr = np.asarray(qpos, dtype=np.float64).flatten()
+        if arr.shape[0] != 3:
+            raise ValueError(f"pd_ee_delta_pos expects 3-dim delta action, got {arr.shape[0]}")
+        return np.hstack([arr, gripper_state])
     return np.hstack([qpos, gripper_state])
 
 
@@ -244,9 +256,15 @@ def follow_path(env, result, gripper_state, robot_config: RobotConfig,
 def actuate_gripper(env, planner, gripper_state, steps=6, step_callback=None):
     """Open or close the gripper for a number of steps."""
     robot = env.unwrapped.agent.robot
+    control_mode = env.unwrapped.control_mode
     qpos = robot.get_qpos()[0, : len(planner.joint_vel_limits)].cpu().numpy()
     for _ in range(steps):
-        action = build_action(env, qpos, gripper_state)
+        if control_mode == "pd_ee_delta_pose":
+            action = build_action(env, np.zeros(6, dtype=np.float64), gripper_state)
+        elif control_mode == "pd_ee_delta_pos":
+            action = build_action(env, np.zeros(3, dtype=np.float64), gripper_state)
+        else:
+            action = build_action(env, qpos, gripper_state)
         obs, reward, terminated, truncated, info = env.step(action)
         if step_callback is not None:
             step_callback()
@@ -283,6 +301,17 @@ def move_to_pose(env, planner, pose, gripper_state, robot_config: RobotConfig,
     Returns None on planning failure, the plan dict if dry_run=True,
     or the last (obs, reward, terminated, truncated, info) tuple.
     """
+    control_mode = env.unwrapped.control_mode
+    if control_mode in {"pd_ee_delta_pose", "pd_ee_delta_pos"}:
+        if dry_run:
+            return {"status": "Success"}
+        return _move_to_pose_ee_delta(
+            env,
+            pose,
+            gripper_state,
+            step_callback=step_callback,
+        )
+
     goal = sapien_to_mplib_pose(pose)
     current_qpos = env.unwrapped.agent.robot.get_qpos().cpu().numpy()[0]
     result = planner.plan_screw(
@@ -298,3 +327,32 @@ def move_to_pose(env, planner, pose, gripper_state, robot_config: RobotConfig,
     return follow_path(env, result, gripper_state, robot_config,
                        monitor_contacts=monitor_contacts,
                        step_callback=step_callback)
+
+def _move_to_pose_ee_delta(env, target_pose: sapien.Pose, gripper_state, *, step_callback=None):
+    """Closed-loop EE-delta servo to target position (no planner)."""
+    raw = env.unwrapped
+    mode = raw.control_mode
+    target_p = np.asarray(target_pose.p, dtype=np.float64).flatten()[:3]
+    last = None
+    max_steps = 120
+    tol = 0.008
+    gain = 6.0
+    max_delta = 0.25
+
+    for _ in range(max_steps):
+        tcp_p = np.asarray(raw.agent.tcp.pose.p, dtype=np.float64).flatten()[:3]
+        err = target_p - tcp_p
+        if float(np.linalg.norm(err)) <= tol:
+            break
+        dpos = np.clip(gain * err, -max_delta, max_delta)
+        if mode == "pd_ee_delta_pose":
+            action = build_action(env, np.array([dpos[0], dpos[1], dpos[2], 0.0, 0.0, 0.0]), gripper_state)
+        elif mode == "pd_ee_delta_pos":
+            action = build_action(env, dpos, gripper_state)
+        else:
+            raise ValueError(f"Unsupported EE-delta mode: {mode}")
+        last = env.step(action)
+        if step_callback is not None:
+            step_callback()
+
+    return last

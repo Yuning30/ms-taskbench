@@ -1,11 +1,11 @@
 # @package _global_
 run:
-  solver: demo_recorder
-  num_episodes: 1
+  solver: pick_place_top_program
+
 env:
   env_id: StackNCube-v1
   control_mode: pd_ee_delta_pose
-  num_envs: 1
   reward_mode: sparse
-  record_video: true
-  render_mode: rgb_array
+  num_envs: 1
+  num_cubes: 2
+

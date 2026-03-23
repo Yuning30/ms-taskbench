@@ -177,9 +177,15 @@ class Move(Skill):
             off = np.asarray(offsets, dtype=np.float64).flatten()[:3]
             target_pos = (p + off).tolist()
 
-            # Fixed default quaternion for this offset-based interface.
-            # SAPIEN convention used in this repo: [w, x, y, z].
-            target_pose = sapien.Pose(target_pos, [1.0, 0.0, 0.0, 0.0])
+            # Reuse current TCP orientation for better IK/planning feasibility.
+            # SAPIEN convention in this repo is [w, x, y, z].
+            tcp_q = self.env.unwrapped.agent.tcp.pose.q
+            try:
+                tcp_q = tcp_q.cpu().numpy()
+            except Exception:
+                tcp_q = np.asarray(tcp_q)
+            tcp_q = np.asarray(tcp_q, dtype=np.float64).flatten()[:4]
+            target_pose = sapien.Pose(target_pos, tcp_q.tolist())
         else:
             target_pose = to_sapien_pose(target_pose_or_cube)
         rc = self.robot_config
@@ -336,10 +342,14 @@ class Place(Skill):
 
             off = np.asarray(offsets, dtype=np.float64).flatten()[:3]
             target_pos = (p + off).tolist()
-
-            # Fixed default quaternion for this offset-based interface.
-            # SAPIEN convention used in this repo: [w, x, y, z].
-            target_pose = sapien.Pose(target_pos, [1.0, 0.0, 0.0, 0.0])
+            # Reuse current TCP orientation in offset mode.
+            tcp_q = self.env.unwrapped.agent.tcp.pose.q
+            try:
+                tcp_q = tcp_q.cpu().numpy()
+            except Exception:
+                tcp_q = np.asarray(tcp_q)
+            tcp_q = np.asarray(tcp_q, dtype=np.float64).flatten()[:4]
+            target_pose = sapien.Pose(target_pos, tcp_q.tolist())
         else:
             target_pose = to_sapien_pose(target_pose_or_cube)
         env, planner, rc = self.env, self.planner, self.robot_config

@@ -16,10 +16,20 @@ run:
     cem_N: 32
     cem_K: 4
     cem_init_std: 0.1
+    # Seeds to evaluate each candidate program on (parallel one process/seed).
+    # Empty means fallback to the runtime seed.
+    eval_seeds: []
+    # Optional process count for parallel seed evaluation.
+    # null means use len(eval_seeds).
+    num_workers: null
+    # Directory with successful expert demos named episode_seed{seed}.hdf5.
+    demo_dir: data/success
+    # Number of sampled points for KDE-based KL estimation.
+    kl_samples: 10000
 
 env:
   env_id: StackNCube-v1
-  control_mode: pd_joint_pos
+  control_mode: pd_ee_delta_pose
   num_envs: 1
   reward_mode: sparse
   num_cubes: 3

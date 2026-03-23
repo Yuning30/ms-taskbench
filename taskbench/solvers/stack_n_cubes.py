@@ -30,6 +30,8 @@ class StackCubesSolver(BaseSolver):
         assert env.unwrapped.control_mode in [
             "pd_joint_pos",
             "pd_joint_pos_vel",
+            "pd_ee_delta_pose",
+            "pd_ee_delta_pos",
         ], f"Unsupported control mode: {env.unwrapped.control_mode}"
 
         raw = env.unwrapped

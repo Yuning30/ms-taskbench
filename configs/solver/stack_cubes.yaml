@@ -3,7 +3,7 @@ run:
   solver: stack_cubes
 env:
   env_id: StackNCube-v1
-  control_mode: pd_joint_pos
+  control_mode: pd_ee_delta_pose
   num_envs: 1
   reward_mode: sparse
   num_cubes: 3
