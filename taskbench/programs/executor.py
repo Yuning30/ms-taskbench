@@ -37,11 +37,31 @@ def _run_instruction(ctx: SkillContext, instr: Instruction):
     if instr.op == "pick":
         return ctx.pick(**instr.args)
     if instr.op == "place":
+        if "target_cube" in instr.args:
+            target_cube = instr.args["target_cube"]
+            offsets = instr.args.get("offsets", instr.args.get("offset"))
+            if offsets is None:
+                raise ValueError("place(target_cube, offsets) requires 'offsets' (or 'offset').")
+            return ctx.place(
+                target_cube,
+                offsets,
+                **{k: v for k, v in instr.args.items() if k not in {"target_cube", "offsets", "offset"}},
+            )
         pos = instr.args.get("pos")
         quat = instr.args.get("quat")
         target_pose = (pos, quat)
         return ctx.place(target_pose, **{k: v for k, v in instr.args.items() if k not in {"pos", "quat"}})
     if instr.op == "move":
+        if "target_cube" in instr.args:
+            target_cube = instr.args["target_cube"]
+            offsets = instr.args.get("offsets", instr.args.get("offset"))
+            if offsets is None:
+                raise ValueError("move(target_cube, offsets) requires 'offsets' (or 'offset').")
+            return ctx.move(
+                target_cube,
+                offsets,
+                **{k: v for k, v in instr.args.items() if k not in {"target_cube", "offsets", "offset"}},
+            )
         pos = instr.args.get("pos")
         quat = instr.args.get("quat")
         target_pose = (pos, quat)

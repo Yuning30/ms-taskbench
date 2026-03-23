@@ -17,7 +17,7 @@ from typing import Callable, Optional
 
 import numpy as np
 import sapien
-from transforms3d.euler import euler2quat
+from transforms3d.euler import euler2quat, quat2euler
 
 from mani_skill.examples.motionplanning.base_motionplanner.utils import (
     compute_grasp_info_by_obb,
@@ -35,6 +35,37 @@ from taskbench.skills.motion import (
 from taskbench.skills.robot_config import RobotConfig, get_robot_config
 
 logger = logging.getLogger("taskbench.skills.primitives")
+
+
+def _axis_aligned_quat_from_tcp(raw) -> list[float]:
+    """Return an axis-aligned quaternion based on current TCP orientation.
+
+    We:
+    - read the current TCP quaternion ``raw.agent.tcp.pose.q`` (SAPIEN: [w, x, y, z])
+    - convert to Euler angles
+    - snap each angle to nearest multiple of 90 degrees
+    - convert back to quaternion (SAPIEN [w, x, y, z])
+    """
+    tcp_q = raw.agent.tcp.pose.q
+    try:
+        tcp_q = tcp_q.cpu().numpy()
+    except Exception:
+        tcp_q = np.asarray(tcp_q)
+    tcp_q = np.asarray(tcp_q, dtype=np.float64).flatten()[:4]
+
+    # transforms3d expects quaternion as [w, x, y, z] here (consistent with euler2quat usage).
+    ai, aj, ak = quat2euler(tcp_q)
+    step = np.pi / 2.0
+    ai_s = float(np.round(ai / step) * step)
+    aj_s = float(np.round(aj / step) * step)
+    ak_s = float(np.round(ak / step) * step)
+    q = euler2quat(ai_s, aj_s, ak_s)
+    q = np.asarray(q, dtype=np.float64).flatten()[:4]
+    # Numerical safety.
+    norm = float(np.linalg.norm(q))
+    if norm > 1e-8:
+        q = q / norm
+    return [float(x) for x in q]
 
 
 # ---------------------------------------------------------------------------
@@ -118,9 +149,39 @@ class Move(Skill):
         monitor_contacts: Abort on collision during execution (default True).
     """
 
-    def __call__(self, target_pose: PoseLike, *, gripper_open=True,
-                 monitor_contacts=True) -> MoveResult:
-        target_pose = to_sapien_pose(target_pose)
+    def __call__(
+        self,
+        target_pose_or_cube: PoseLike | str,
+        offsets: list[float] | tuple[float, float, float] | None = None,
+        *,
+        gripper_open=True,
+        monitor_contacts=True,
+    ) -> MoveResult:
+        # New interface: ctx.move(target_cube, [x_offset, y_offset, z_offset])
+        # Old interface remains supported: ctx.move(target_pose)
+        if offsets is not None:
+            if not isinstance(target_pose_or_cube, str):
+                raise TypeError("When providing offsets, target must be a cube/object name (str).")
+            if target_pose_or_cube not in self.objects:
+                raise KeyError(f"Unknown object {target_pose_or_cube!r}. Available: {list(self.objects)}")
+
+            obj = self.objects[target_pose_or_cube]
+            # obj.pose.p is typically a torch tensor, but be robust to numpy.
+            p = obj.pose.p
+            try:
+                p = p.cpu().numpy()
+            except Exception:
+                p = np.asarray(p)
+            p = np.asarray(p, dtype=np.float64).flatten()[:3]
+
+            off = np.asarray(offsets, dtype=np.float64).flatten()[:3]
+            target_pos = (p + off).tolist()
+
+            # Fixed default quaternion for this offset-based interface.
+            # SAPIEN convention used in this repo: [w, x, y, z].
+            target_pose = sapien.Pose(target_pos, [1.0, 0.0, 0.0, 0.0])
+        else:
+            target_pose = to_sapien_pose(target_pose_or_cube)
         rc = self.robot_config
         gripper_state = rc.gripper_open if gripper_open else rc.gripper_closed
         res = move_to_pose(self.env, self.planner, target_pose, gripper_state,
@@ -249,9 +310,38 @@ class Place(Skill):
             If None, retracts 0.1m above the release pose.
     """
 
-    def __call__(self, target_pose: PoseLike, *, settling_steps=10,
-                 retract_height=None) -> PlaceResult:
-        target_pose = to_sapien_pose(target_pose)
+    def __call__(
+        self,
+        target_pose_or_cube: PoseLike | str,
+        offsets: list[float] | tuple[float, float, float] | None = None,
+        *,
+        settling_steps=10,
+        retract_height=None,
+    ) -> PlaceResult:
+        # New interface: ctx.place(target_cube, [x_offset, y_offset, z_offset])
+        # Old interface remains supported: ctx.place(target_pose)
+        if offsets is not None:
+            if not isinstance(target_pose_or_cube, str):
+                raise TypeError("When providing offsets, target must be a cube/object name (str).")
+            if target_pose_or_cube not in self.objects:
+                raise KeyError(f"Unknown object {target_pose_or_cube!r}. Available: {list(self.objects)}")
+
+            obj = self.objects[target_pose_or_cube]
+            p = obj.pose.p
+            try:
+                p = p.cpu().numpy()
+            except Exception:
+                p = np.asarray(p)
+            p = np.asarray(p, dtype=np.float64).flatten()[:3]
+
+            off = np.asarray(offsets, dtype=np.float64).flatten()[:3]
+            target_pos = (p + off).tolist()
+
+            # Fixed default quaternion for this offset-based interface.
+            # SAPIEN convention used in this repo: [w, x, y, z].
+            target_pose = sapien.Pose(target_pos, [1.0, 0.0, 0.0, 0.0])
+        else:
+            target_pose = to_sapien_pose(target_pose_or_cube)
         env, planner, rc = self.env, self.planner, self.robot_config
         move = Move(env, planner, robot_config=rc, step_callback=self.step_callback)
 

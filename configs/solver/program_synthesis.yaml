@@ -5,6 +5,17 @@ run:
     # Number of instruction slots in the initial program.
     # All slots start as "skip" and can be rewritten by the synthesis algorithm.
     program_length: 3
+    # How many MCMC iterations over program structure proposals.
+    mcmc_iters: 10
+    # How many environment steps to advance for each `skip` instruction
+    # during execution/evaluation.
+    skip_steps: 0
+    # CEM (continuous optimizer) hyperparameters used to optimize float-valued
+    # parameters inside instruction args.
+    cem_iters: 10
+    cem_N: 32
+    cem_K: 4
+    cem_init_std: 0.1
 
 env:
   env_id: StackNCube-v1
