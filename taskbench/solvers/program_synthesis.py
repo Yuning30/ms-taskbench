@@ -166,14 +166,37 @@ class ProgramSynthesisSolver(BaseSolver):
         return pool.starmap(_evaluate_program_for_seed, jobs)
 
     def _build_initial_program(self, cfg: DictConfig | None) -> Program:
-        """Construct an initial program of the requested length.
+        """Construct a hardcoded pick->place program with zeroed floats.
 
-        All instruction slots are initialized to a ``skip`` op, which is a
-        no-op in the executor. A synthesis algorithm can then rewrite these
-        instructions in-place (changing ``op`` and ``args``) without having
-        to change the length.
+        Structure is fixed to:
+        1) pick cube_0
+        2) place onto cube_1 via (target_cube, offsets)
+
+        Float-valued args are intentionally initialized to zeros so CEM can
+        learn them.
         """
-        instructions = [Instruction("skip", {}) for _ in range(self.program_length)]
+        instructions = [
+            Instruction(
+                "pick",
+                {
+                    "obj_name": "cube_0",
+                    "lift_height": 0.0,
+                    "verify_grasp": True,
+                },
+            ),
+            Instruction(
+                "place",
+                {
+                    "target_cube": "cube_1",
+                    "offsets": [0.0, 0.0, 0.0],
+                    "retract_height": 0.0,
+                    "settling_steps": 10,
+                },
+            ),
+        ]
+        # Keep any additional requested slots as no-op placeholders.
+        while len(instructions) < self.program_length:
+            instructions.append(Instruction("skip", {}))
         return Program(instructions=instructions)
 
     # --- MCMC helpers -----------------------------------------------------
@@ -323,6 +346,7 @@ class ProgramSynthesisSolver(BaseSolver):
         collecting `float` / `np.floating` values; non-floats (bool/int/None)
         are ignored.
         """
+        # import pdb; pdb.set_trace()
         x0, refs = extract_float_parameters(program)
         if x0.shape[0] == 0 or self.cem_iters <= 0:
             return program, cost_fn(program)
@@ -386,6 +410,8 @@ class ProgramSynthesisSolver(BaseSolver):
         # Build initial program and run an MCMC optimization loop over programs.
         initial_program = self._build_initial_program(cfg)
 
+        # Use spawn for maximum compatibility with PyTorch + ManiSkill.
+        # This avoids CUDA/fork re-initialization errors in subprocesses.
         mp_ctx = mp.get_context("spawn")
         with mp_ctx.Pool(processes=workers) as pool:
             def _cost_fn(p: Program) -> float:
@@ -400,7 +426,11 @@ class ProgramSynthesisSolver(BaseSolver):
 
             # --- MCMC with inner CEM optimization (like external mcmc.py) ----
             current_program = deepcopy(initial_program)
-            current_cost = _cost_fn(current_program)
+            # First, optimize continuous parameters on the hardcoded structure.
+            current_program, current_cost = self._optimize_program_float_params_via_cem(
+                current_program,
+                cost_fn=_cost_fn,
+            )
             logger.info(
                 "Initial program: %s",
                 json.dumps([asdict(instr) for instr in current_program.instructions]),

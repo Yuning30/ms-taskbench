@@ -31,6 +31,7 @@ def make_env(cfg):
         num_envs=cfg.num_envs,
         max_episode_steps=cfg.max_episode_steps,
         render_mode=render_mode,
+        render_backend="cpu",
         **kwargs,
     )
 
@@ -68,6 +69,7 @@ def make_single_env(cfg):
         max_episode_steps=cfg.max_episode_steps,
         render_mode=render_mode,
         sim_backend="cpu",
+        render_backend="cpu",
         **kwargs,
     )
 

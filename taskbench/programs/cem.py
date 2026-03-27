@@ -47,10 +47,12 @@ def cem_optimize(
     best_mu = mu.copy()
 
     for _ in range(iterations):
+        print(f"CEM Iteration {_} of {iterations}")
         samples = rng.standard_normal(size=(N, dim)) * sigma + mu
 
         # Sequential evaluation (keeps f as an arbitrary Python callable).
         scores = np.asarray([float(f(s)) for s in samples], dtype=float)
+        print(f"Scores: {scores}")
 
         # Pick top-K elites (maximize).
         elite_idx = np.argsort(scores)[-K:]
