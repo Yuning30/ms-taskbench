@@ -1,0 +1,13 @@
+# @package _global_
+run:
+  solver: build2d_program
+  solver_kwargs:
+    pick_lift_height: 0.12
+env:
+  env_id: Build2D-v1
+  control_mode: pd_ee_delta_pose
+  num_envs: 1
+  reward_mode: sparse
+  extra_kwargs:
+    grid_rows: 3
+    grid_cols: 3

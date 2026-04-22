@@ -18,6 +18,32 @@ uv sync
 
 ## Tasks
 
+### Build2D
+
+Build an `m x n` 2D grid by placing one block at each linked-list node target.
+The env exposes a head node `h` where each node has `.r` (right), `.d` (down),
+and world coordinates `(x, y, z)`.
+
+**Solver:** `build2d_program` — executes the canonical nested-loop program:
+
+```python
+i <- h
+while i != null:
+    j <- i
+    while j != null:
+        put a block on j
+        j <- j.r
+    i <- i.d
+```
+
+```bash
+# Run in simulator
+uv run python -m taskbench.run solver=build2d_program env.extra_kwargs.grid_rows=3 env.extra_kwargs.grid_cols=4
+
+# Dry-run DSL semantics only (no ManiSkill required)
+uv run python -m taskbench.programs.build2d_demo --rows 3 --cols 4
+```
+
 ### StackNCube
 
 Stack N cubes into a tower. `cube_0` (green) is always the base — the solver picks the remaining cubes in random order and stacks them on top.
