@@ -14,10 +14,11 @@ dependencies = [
     "wandb",
     "gymnasium",
     "setuptools<82",
+    "pyarrow>=14",
 ]
 
 [project.optional-dependencies]
-dev = ["black", "isort"]
+dev = ["black", "isort", "pytest>=8"]
 
 [tool.setuptools.packages.find]
 include = ["taskbench*"]
