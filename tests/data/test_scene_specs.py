@@ -62,3 +62,25 @@ def test_canonical_snapshots_progression():
     # Sanity: target_idx is monotonically not-equal across consecutive snapshots.
     targets = [s.target_idx for s in specs]
     assert len(set(targets)) == len(targets) or True  # weak; main assertion is structural
+
+
+from taskbench.data.scene_specs import templated_scene_specs
+
+
+def test_templated_specs_returns_multiple_archetypes():
+    specs = templated_scene_specs(seed=0, grid_rows=3, grid_cols=3)
+    # We expect at least 3 archetypes × ~10 sweep steps = 30+ specs.
+    assert len(specs) >= 30
+    archetypes = {s.metadata["archetype"] for s in specs}
+    assert archetypes >= {"adjacent_obstacle", "edge_target", "ringed_target"}
+    for s in specs:
+        assert s.source == "templated"
+        assert s.target_idx is not None
+
+
+def test_templated_specs_deterministic():
+    a = templated_scene_specs(seed=0, grid_rows=3, grid_cols=3)
+    b = templated_scene_specs(seed=0, grid_rows=3, grid_cols=3)
+    assert len(a) == len(b)
+    for sa, sb in zip(a, b):
+        assert np.allclose(sa.block_poses, sb.block_poses)

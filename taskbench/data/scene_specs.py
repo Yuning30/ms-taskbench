@@ -169,3 +169,74 @@ def canonical_program_snapshot_specs(
             metadata={"step": k},
         ))
     return specs
+
+
+def _spec_from_xy(
+    *, seed, grid_rows, grid_cols, xys, target_idx, archetype, sweep_step
+) -> SceneSpec:
+    """Create a SceneSpec from xy positions, padding to grid size."""
+    n_real = len(xys)
+    n_total = grid_rows * grid_cols
+    poses = np.zeros((n_total, 7), dtype=np.float64)
+    mask = np.zeros(n_total, dtype=bool)
+    for i, (x, y) in enumerate(xys):
+        poses[i, :2] = (x, y)
+        poses[i, 2] = BLOCK_TOP_Z
+        poses[i, 3] = 1.0
+        mask[i] = True
+    return SceneSpec(
+        seed=seed,
+        grid_rows=grid_rows,
+        grid_cols=grid_cols,
+        block_poses=poses,
+        block_mask=mask,
+        target_idx=target_idx,
+        source="templated",
+        metadata={"archetype": archetype, "sweep_step": sweep_step,
+                  "n_real": n_real},
+    )
+
+
+def templated_scene_specs(
+    *,
+    seed: int,
+    grid_rows: int,
+    grid_cols: int,
+) -> list[SceneSpec]:
+    """Hand-designed scene archetypes with parametric sweeps.
+
+    Each archetype tests a specific feasibility boundary. Returned specs share
+    the SceneSpec contract (padded to grid_rows*grid_cols block slots).
+    """
+    rng = np.random.default_rng(seed)
+    specs: list[SceneSpec] = []
+
+    # 1. adjacent_obstacle: target at origin, obstacle along +x at varying d.
+    for k, d in enumerate(np.linspace(0.045, 0.12, num=12)):
+        xys = [(0.0, 0.0), (float(d), 0.0)]
+        specs.append(_spec_from_xy(
+            seed=seed, grid_rows=grid_rows, grid_cols=grid_cols,
+            xys=xys, target_idx=0, archetype="adjacent_obstacle", sweep_step=k,
+        ))
+
+    # 2. edge_target: target near +x workspace edge at varying d.
+    for k, x in enumerate(np.linspace(0.18, 0.255, num=10)):
+        xys = [(float(x), 0.0)]
+        specs.append(_spec_from_xy(
+            seed=seed, grid_rows=grid_rows, grid_cols=grid_cols,
+            xys=xys, target_idx=0, archetype="edge_target", sweep_step=k,
+        ))
+
+    # 3. ringed_target: target at origin, 4 obstacles in a ring at radius r.
+    for k, r in enumerate(np.linspace(0.045, 0.10, num=10)):
+        ring = [(float(r) * np.cos(a), float(r) * np.sin(a))
+                for a in np.linspace(0, 2 * np.pi, num=4, endpoint=False)]
+        xys = [(0.0, 0.0), *ring]
+        specs.append(_spec_from_xy(
+            seed=seed, grid_rows=grid_rows, grid_cols=grid_cols,
+            xys=xys, target_idx=0, archetype="ringed_target", sweep_step=k,
+        ))
+
+    # Touch rng so determinism path is exercised (future archetypes may use it).
+    _ = rng.random()
+    return specs
