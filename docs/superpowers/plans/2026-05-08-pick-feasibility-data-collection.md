@@ -1442,10 +1442,28 @@ Recommendation: **250 SLURM tasks × 2000 samples each**. At ~5 h wall-clock wit
 ## Out of Scope (follow-up plans)
 
 - SLURM array-job submission script (next plan)
-- Per-sample timeout in the runner (recommended before production)
 - The actual 500K production run
 - Training the feasibility classifier itself
 - Quality / coverage metrics on the resulting dataset
+
+### Punch list for the SLURM submission plan
+
+These were surfaced by the final code review and should be addressed before launching 500K — they are NOT blocking for the smoke-scale runs validated here (≤1K samples).
+
+**Production blockers:**
+1. **Per-sample timeout in `run_pick_sample`.** A pathological scene was observed at 111 s (2 minutes); without a timeout, a single divergent physics state could stall a worker indefinitely. Add a `signal.alarm` or `threading.Timer` wrapper around `ctx.pick(...)` with a budget of ~60 s.
+2. **Corrupt-shard resilience in `_existing_shards`.** `pq.read_metadata(s)` is unprotected; a worker killed mid-`write_table` leaves a truncated parquet that breaks `--resume`. Wrap in try/except, log + delete the corrupt shard, and continue.
+3. **scene_id namespacing across SLURM tasks.** All workers currently produce `s00000000…`. When merging shards from `task_<id>/` directories, IDs collide. Add a `--task-id <int>` CLI arg to `collect.py` and prefix `scene_id` with it (e.g., `t0042_s00012345`).
+4. **Reproducibility metadata in `run_meta.json`.** Add git commit hash (`subprocess.check_output(["git", "rev-parse", "HEAD"])`), timestamp, and key library versions. Without this, any anomaly in the 500K dataset is hard to trace back to code.
+
+**Nice-to-haves:**
+5. Refactor `SkillContext.reset()` to accept `options=...` and pass through to `env.reset()`; eliminates the triple-reset in `run_pick_sample` and the `ctx.planner = ctx.planner` no-op.
+6. Document the resume-seed-drift behavior: `_yield_specs(seed=args.seed + written, ...)` produces a different stream after interruption than if the run had completed in one shot. Per-SLURM-task this is fine; the merged dataset is approximately (not exactly) 70/20/10.
+7. Declare `slow` as a custom pytest marker in `pyproject.toml` to suppress the `PytestUnknownMarkWarning` that fires on every test run.
+8. Tighten `test_random_scene_within_workspace` bounds to actually match `WORKSPACE_X/Y = (-0.26, 0.26)` instead of `(-0.30, 0.30)`.
+
+**Known limitations (document, don't fix):**
+9. `canonical_program_snapshot_specs` does not avoid grid-target positions when sampling `init_xy`, so on rare seeds an unpicked block can be initialized overlapping a placed target. Adds a small amount of label noise via the physics solver but doesn't corrupt the success/failure signal.
 
 ## Production Run Reference (for the follow-up plan)
 
