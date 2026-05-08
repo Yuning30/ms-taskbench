@@ -144,6 +144,21 @@ class Build2DEnv(TaskEnv):
         with torch.device(self.device):
             b = len(env_idx)
             self.table_scene.initialize(env_idx)
+
+            overrides = (options or {}).get("block_overrides")
+            if overrides is not None:
+                arr = np.asarray(overrides, dtype=np.float32)
+                if arr.shape != (len(self.blocks), 7):
+                    raise ValueError(
+                        f"block_overrides shape {arr.shape}; expected "
+                        f"({len(self.blocks)}, 7)"
+                    )
+                for k, block in enumerate(self.blocks):
+                    p = torch.tensor(arr[k, :3], device=self.device).expand(b, 3).clone()
+                    q = torch.tensor(arr[k, 3:], device=self.device).expand(b, 4).clone()
+                    block.set_pose(Pose.create_from_pq(p=p, q=q))
+                return
+
             sampler = randomization.UniformPlacementSampler(
                 bounds=[[-0.26, -0.2], [-0.12, 0.2]],
                 batch_size=b,
