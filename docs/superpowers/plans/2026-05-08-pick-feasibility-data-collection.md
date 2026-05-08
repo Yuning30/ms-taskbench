@@ -1398,9 +1398,51 @@ git commit -m "docs: record benchmark numbers from smoke run"
 - Failure path coverage: runner catches exceptions, collect CLI catches per-sample crashes, shards are flushed every K samples so SLURM preemption is recoverable via `--resume`.
 - 500K-scale concerns are deferred: SLURM submission script will be a follow-up plan once Task 10 produces real timing numbers.
 
+## Benchmark Results (Task 10)
+
+Run on a single CPU node, 2026-05-08. Build2D-v1 grid 3x3 (9 source blocks, 9 target slots).
+
+**Benchmark CLI** (`benchmark.py --n 10 --grid-rows 3 --grid-cols 3`):
+
+```
+Env setup: 2.1 s
+mean:   6.14 s   (skewed by one 40s tail outlier)
+median: 2.46 s   (typical sample)
+p95:    40.32 s
+min:    1.68 s
+max:    40.32 s
+failure_rate: 2/10 (20.0%)
+```
+
+**Collection CLI** (`collect.py --n 50 --grid-rows 3 --grid-cols 3 --shard-size 25`):
+
+- Rows: 50 (mix exact: 35 random / 10 canonical / 5 templated = 70/20/10)
+- Wall time: ~7 minutes (rate 0.12 samples/s)
+- Success rate: 30/50 = **60%**
+- Failed legs: `grasp_approach` 14, `reach` 4, `grasp_verify` 2
+- Wall time per sample: median **2.64 s**, mean **8.06 s**, p95 **38.85 s**, max **111.45 s**
+
+### Sizing for the 500K production run
+
+| Concurrency | Wall-clock estimate (mean basis) |
+|---|---|
+| 1 task | ~47 days (1120 h) |
+| 100 SLURM tasks | ~11 h |
+| 250 SLURM tasks | ~5 h |
+| 500 SLURM tasks | ~2.5 h |
+
+Recommendation: **250 SLURM tasks × 2000 samples each**. At ~5 h wall-clock with comfortable startup amortization (each worker does enough samples to absorb cold-start cost). If the cluster is underutilized, scale to 500 tasks × 1000 samples each for ~2.5 h. Avoid >1000 tasks (per-worker startup amortization breaks down).
+
+### Risks observed and worth flagging in the SLURM plan
+
+- **Long-tail samples (~110 s outliers).** A pathological scene can stall a single worker for nearly 2 minutes. With 250 tasks each doing 2000 samples, expect ~10 such outliers per worker — adds ~20 minutes to that worker's runtime. Fine in aggregate, but worth a per-sample timeout (e.g., 60 s) in the runner before the production run.
+- **Failure rate 20-40%.** This is a feature, not a bug — the verifier needs both positive and negative samples. But confirms the 70/20/10 mix isn't trivially-easy.
+- **Per-process startup is ~10 s.** With ≥1000 samples per worker, this is <1% overhead.
+
 ## Out of Scope (follow-up plans)
 
-- SLURM array-job submission script
+- SLURM array-job submission script (next plan)
+- Per-sample timeout in the runner (recommended before production)
 - The actual 500K production run
 - Training the feasibility classifier itself
 - Quality / coverage metrics on the resulting dataset
