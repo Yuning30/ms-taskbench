@@ -12,7 +12,7 @@ outputs/
 videos/
 videos_old/
 replay_videos/
-data/
+/data/
 
 # OS
 .DS_Store
