@@ -175,8 +175,10 @@ def _spec_from_xy(
     *, seed, grid_rows, grid_cols, xys, target_idx, archetype, sweep_step
 ) -> SceneSpec:
     """Create a SceneSpec from xy positions, padding to grid size."""
-    n_real = len(xys)
     n_total = grid_rows * grid_cols
+    # Silently truncate xys if more objects than grid slots.
+    xys = xys[:n_total]
+    n_real = len(xys)
     poses = np.zeros((n_total, 7), dtype=np.float64)
     mask = np.zeros(n_total, dtype=bool)
     for i, (x, y) in enumerate(xys):
