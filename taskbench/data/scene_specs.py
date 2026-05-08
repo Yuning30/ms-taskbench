@@ -112,3 +112,60 @@ def random_scene_spec(
         target_idx=target_idx,
         source="random",
     )
+
+
+def canonical_program_snapshot_specs(
+    *,
+    seed: int,
+    grid_rows: int,
+    grid_cols: int,
+    grid_origin_x: float = 0.05,
+    grid_spacing: float = 0.07,
+) -> list[SceneSpec]:
+    """Return one SceneSpec per pick step of the canonical row-major program.
+
+    At step k:
+        - the first k blocks are at their grid target xy (placed)
+        - the remaining n-k blocks are at their initial randomized positions
+        - target_idx points to the block being picked at step k (the (k+1)-th)
+    """
+    rng = np.random.default_rng(seed)
+    n = grid_rows * grid_cols
+
+    # Initial randomized table positions for all blocks.
+    init_xy = _sample_non_overlapping_xy(rng, n)
+    init_quats = np.stack([_random_yaw_quat(rng) for _ in range(n)])
+
+    # Grid target xy in row-major order, matching Build2DEnv layout.
+    grid_origin_y = -((grid_cols - 1) * grid_spacing) / 2.0
+    targets_xy = []
+    for i in range(grid_rows):
+        for j in range(grid_cols):
+            targets_xy.append((grid_origin_x + i * grid_spacing,
+                               grid_origin_y + j * grid_spacing))
+    targets_xy = np.array(targets_xy, dtype=np.float64)
+
+    specs: list[SceneSpec] = []
+    for k in range(n):
+        poses = np.zeros((n, 7), dtype=np.float64)
+        poses[:, 2] = BLOCK_TOP_Z
+        # First k blocks: placed at grid targets, identity orientation.
+        for placed_idx in range(k):
+            poses[placed_idx, :2] = targets_xy[placed_idx]
+            poses[placed_idx, 3] = 1.0  # qw
+        # Remaining blocks: at initial randomized positions, random yaw.
+        for j in range(k, n):
+            poses[j, :2] = init_xy[j]
+            poses[j, 3:] = init_quats[j]
+        mask = np.ones(n, dtype=bool)
+        specs.append(SceneSpec(
+            seed=seed,
+            grid_rows=grid_rows,
+            grid_cols=grid_cols,
+            block_poses=poses,
+            block_mask=mask,
+            target_idx=k,
+            source="canonical",
+            metadata={"step": k},
+        ))
+    return specs
