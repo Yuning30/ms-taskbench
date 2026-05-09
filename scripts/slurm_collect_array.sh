@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=pickfeas
 #SBATCH --partition=unlimited
-#SBATCH --array=0-49
+#SBATCH --array=0-299
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=4G
 #SBATCH --output=/common/users/shared/pracsys/ms-taskbench-data/datasets/pick_2dgrid_mplib_500k/slurm_logs/task_%a.out
@@ -12,7 +12,7 @@
 #   mkdir -p /common/users/shared/pracsys/ms-taskbench-data/datasets/pick_2dgrid_mplib_500k/slurm_logs
 #   sbatch scripts/slurm_collect_array.sh
 #
-# 50 array tasks × 10,000 samples = 500,000 samples total.
+# 300 array tasks × 1,667 samples ≈ 500,100 samples total (~500K).
 # Outputs: /common/users/shared/pracsys/ms-taskbench-data/datasets/pick_2dgrid_mplib_500k/task_<id:04d>/
 
 set -euo pipefail
@@ -31,7 +31,7 @@ cd "$REPO_ROOT"
 
 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
   uv run python -m taskbench.data.collect \
-    --n 10000 \
+    --n 1667 \
     --grid-rows 3 --grid-cols 3 \
     --seed "$SEED" \
     --task-id "$TASK_ID" \

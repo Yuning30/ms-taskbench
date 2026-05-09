@@ -36,6 +36,7 @@ def main():
         "Build2D-v1",
         num_envs=1,
         sim_backend="cpu",
+        render_backend="cpu",
         control_mode="pd_joint_pos",
         grid_rows=args.grid_rows,
         grid_cols=args.grid_cols,
