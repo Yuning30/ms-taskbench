@@ -1,7 +1,7 @@
 #!/bin/bash
 # Launch a pool of taskbench.data.collect processes in parallel.
 #
-# Usage: run_collect_pool.sh N_PROCS SAMPLES_PER_PROC OUT_DIR [BASE_SEED] [GRID_ROWS] [GRID_COLS]
+# Usage: run_collect_pool.sh N_PROCS SAMPLES_PER_PROC OUT_DIR [BASE_SEED] [GRID_ROWS] [GRID_COLS] [SHARD_SIZE]
 #
 # Each task i writes shards under OUT_DIR/task_<i:04d>/ and logs to OUT_DIR/task_<i:04d>.log.
 # Seeds are deterministic: BASE_SEED + i * 1000000 (large stride to keep streams disjoint).
@@ -10,7 +10,7 @@
 set -euo pipefail
 
 if [ "$#" -lt 3 ]; then
-  echo "Usage: $0 N_PROCS SAMPLES_PER_PROC OUT_DIR [BASE_SEED] [GRID_ROWS] [GRID_COLS]" >&2
+  echo "Usage: $0 N_PROCS SAMPLES_PER_PROC OUT_DIR [BASE_SEED] [GRID_ROWS] [GRID_COLS] [SHARD_SIZE]" >&2
   exit 2
 fi
 
@@ -20,6 +20,7 @@ OUT=$3
 BASE_SEED=${4:-0}
 GR=${5:-3}
 GC=${6:-3}
+SHARD_SIZE=${7:-100}
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 mkdir -p "$OUT"
@@ -39,7 +40,7 @@ for i in $(seq 0 $((N-1))); do
       --grid-rows "$GR" --grid-cols "$GC" \
       --seed "$SEED" \
       --task-id "$i" \
-      --shard-size 100 \
+      --shard-size "$SHARD_SIZE" \
       --out "$TASK_DIR" \
       --resume \
       > "$LOG" 2>&1 &
