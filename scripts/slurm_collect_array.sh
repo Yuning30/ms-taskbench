@@ -27,6 +27,13 @@ TASK_OUT="$PROD_OUT/task_$(printf '%04d' "$TASK_ID")"
 echo "[$(date -Iseconds)] node=$(hostname) task_id=$TASK_ID seed=$SEED out=$TASK_OUT"
 echo "  ulimit -u: $(ulimit -u), cpus-per-task: ${SLURM_CPUS_PER_TASK:-?}"
 
+# Random startup stagger: tasks landing on the same node initialize sapien
+# (which spawns ~25 threads) at different moments, avoiding the simultaneous
+# fork burst that triggers EAGAIN on this cluster's per-user thread limit.
+STAGGER_S=$(( RANDOM % 90 ))
+echo "  stagger sleep: ${STAGGER_S}s"
+sleep "$STAGGER_S"
+
 cd "$REPO_ROOT"
 
 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
