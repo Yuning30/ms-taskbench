@@ -7,6 +7,8 @@ captures rich signals, and returns a PickFeasibilitySample.
 from __future__ import annotations
 
 import logging
+import signal
+import threading
 import time
 from typing import Optional
 
@@ -26,6 +28,26 @@ _LEG_BY_REASON = {
     "grasp_verification_failed": "grasp_verify",
     "lift_failed": "lift",
 }
+
+
+# ---------------------------------------------------------------------------
+# SIGALRM-based per-sample timeout
+# ---------------------------------------------------------------------------
+
+class _PickTimeout(Exception):
+    """Raised by the SIGALRM handler when a pick exceeds its budget."""
+
+
+def _alarm_supported() -> bool:
+    """True only when SIGALRM is available AND we are in the main thread."""
+    return (
+        threading.current_thread() is threading.main_thread()
+        and hasattr(signal, "SIGALRM")
+    )
+
+
+def _alarm_handler(signum, frame):  # noqa: ANN001
+    raise _PickTimeout()
 
 
 def _leg_for_reason(reason: Optional[str]) -> Optional[str]:
@@ -67,8 +89,16 @@ def run_pick_sample(
     *,
     scene_id: str,
     pick_lift_height: float = 0.12,
+    pick_timeout_s: float = 60.0,
 ) -> PickFeasibilitySample:
-    """Reset env to spec, execute Pick on spec.target_idx, return labeled sample."""
+    """Reset env to spec, execute Pick on spec.target_idx, return labeled sample.
+
+    Args:
+        pick_timeout_s: Maximum wall-clock seconds allowed for ctx.pick().
+            If the pick exceeds this budget (and SIGALRM is available), the
+            sample is returned as a failure with failure_reason="timeout".
+            Default 60 s. Pass 0 or math.inf to disable.
+    """
     if spec.target_idx is None:
         raise ValueError("SceneSpec.target_idx must be set for run_pick_sample.")
     n = spec.grid_rows * spec.grid_cols
@@ -98,20 +128,37 @@ def run_pick_sample(
 
     robot_qpos = _read_robot_qpos(env)
 
+    use_alarm = _alarm_supported() and pick_timeout_s > 0
     t0 = time.perf_counter()
     failure_reason: Optional[str] = None
     failed_leg: Optional[str] = None
     success = False
     try:
-        result = ctx.pick(target_name, lift_height=pick_lift_height)
-        success = bool(result.success)
-        if not success:
-            failure_reason = result.failure_reason
-            failed_leg = _leg_for_reason(failure_reason)
-    except Exception as exc:
+        if use_alarm:
+            old_handler = signal.signal(signal.SIGALRM, _alarm_handler)
+            signal.setitimer(signal.ITIMER_REAL, pick_timeout_s)
+        try:
+            result = ctx.pick(target_name, lift_height=pick_lift_height)
+            success = bool(result.success)
+            if not success:
+                failure_reason = result.failure_reason
+                failed_leg = _leg_for_reason(failure_reason)
+        except _PickTimeout:
+            failure_reason = "timeout"
+            failed_leg = "timeout"
+            logger.warning("Pick timed out after %.1f s for scene %s", pick_timeout_s, scene_id)
+        except Exception as exc:
+            failure_reason = f"exception:{type(exc).__name__}:{exc}"
+            failed_leg = "exception"
+            logger.warning("Pick raised: %s", exc)
+        finally:
+            if use_alarm:
+                signal.setitimer(signal.ITIMER_REAL, 0)
+                signal.signal(signal.SIGALRM, old_handler)
+    except Exception as exc:  # safety net for signal setup errors
         failure_reason = f"exception:{type(exc).__name__}:{exc}"
         failed_leg = "exception"
-        logger.warning("Pick raised: %s", exc)
+        logger.warning("Pick raised (outer): %s", exc)
     elapsed = time.perf_counter() - t0
 
     final_pose = _read_object_pose(target_obj) if success else None

@@ -9,9 +9,11 @@ Run: uv run python -m taskbench.data.collect --n 1000 --out outputs/pick_feasibi
 from __future__ import annotations
 
 import argparse
+import datetime
 import json
 import logging
 import random
+import subprocess
 import time
 from pathlib import Path
 from typing import Iterator
@@ -88,17 +90,36 @@ def _yield_specs(
 
 
 def _existing_shards(out_dir: Path) -> tuple[int, int]:
-    """Return (next_shard_idx, n_samples_already_written)."""
+    """Return (next_shard_idx, n_samples_already_written).
+
+    Corrupt/truncated shards are logged, deleted, and skipped so a
+    SLURM preemption that leaves a half-written file does not abort a resume.
+    """
     shards = sorted(out_dir.glob("shard_*.parquet"))
-    if not shards:
-        return 0, 0
-    n = sum(pq.read_metadata(s).num_rows for s in shards)
-    last = int(shards[-1].stem.split("_")[1])
+    valid_shards = []
+    n = 0
+    for s in shards:
+        try:
+            meta = pq.read_metadata(s)
+            n += meta.num_rows
+            valid_shards.append(s)
+        except Exception as exc:
+            logger.warning("Corrupt shard %s removed: %s", s.name, exc)
+            try:
+                s.unlink()
+            except OSError as oex:
+                logger.warning("  also failed to unlink: %s", oex)
+    if not valid_shards:
+        return 0, n
+    last = int(valid_shards[-1].stem.split("_")[1])
     return last + 1, n
 
 
-def main():
-    p = argparse.ArgumentParser()
+def _build_parser() -> argparse.ArgumentParser:
+    """Return the argument parser for the collect CLI."""
+    p = argparse.ArgumentParser(
+        description="Pick-feasibility data collection."
+    )
     p.add_argument("--n", type=int, required=True, help="Total samples to collect.")
     p.add_argument("--grid-rows", type=int, default=3)
     p.add_argument("--grid-cols", type=int, default=3)
@@ -108,7 +129,37 @@ def main():
                    help="Samples per parquet shard.")
     p.add_argument("--resume", action="store_true",
                    help="Skip already-written samples (counted via shards).")
-    args = p.parse_args()
+    p.add_argument("--task-id", type=int, default=None,
+                   help="Optional integer task id; when set, scene_ids are prefixed t{task_id:04d}_.")
+    return p
+
+
+def _build_run_meta(args) -> dict:
+    """Return the run_meta dict for args, including git hash and start time."""
+    try:
+        git_hash = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], text=True
+        ).strip()
+    except Exception:
+        git_hash = "unknown"
+
+    started_at = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+
+    return {
+        "n_target": args.n,
+        "grid_rows": args.grid_rows,
+        "grid_cols": args.grid_cols,
+        "seed": args.seed,
+        "shard_size": args.shard_size,
+        "mix": MIX,
+        "task_id": args.task_id,
+        "git_hash": git_hash,
+        "started_at": started_at,
+    }
+
+
+def main():
+    args = _build_parser().parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     args.out.mkdir(parents=True, exist_ok=True)
@@ -125,14 +176,7 @@ def main():
     # Save run metadata once per run.
     meta_path = args.out / "run_meta.json"
     if not meta_path.exists():
-        meta_path.write_text(json.dumps({
-            "n_target": args.n,
-            "grid_rows": args.grid_rows,
-            "grid_cols": args.grid_cols,
-            "seed": args.seed,
-            "shard_size": args.shard_size,
-            "mix": MIX,
-        }, indent=2))
+        meta_path.write_text(json.dumps(_build_run_meta(args), indent=2))
 
     env = gym.make(
         "Build2D-v1",
@@ -155,7 +199,11 @@ def main():
     shard_idx = next_idx
     t_start = time.perf_counter()
     for i, spec in enumerate(spec_iter, start=written):
-        scene_id = f"s{i:08d}"
+        scene_id = (
+            f"t{args.task_id:04d}_s{i:08d}"
+            if args.task_id is not None
+            else f"s{i:08d}"
+        )
         try:
             sample = run_pick_sample(env, ctx, spec, scene_id=scene_id)
         except Exception as exc:
