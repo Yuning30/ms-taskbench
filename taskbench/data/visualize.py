@@ -40,14 +40,33 @@ import gymnasium as gym
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
+import sapien
 from PIL import Image
 
+from mani_skill.sensors.camera import CameraConfig
 from mani_skill.utils.wrappers import RecordEpisode
 
 import taskbench.envs  # noqa: F401 — register env
+import taskbench.envs.build2d as _build2d
 from taskbench.envs import get_objects
 from taskbench.skills.context import SkillContext
 from taskbench.skills.motion import setup_planner
+
+
+def _topdown_render_camera(self):
+    """Override Build2DEnv's render camera with a top-down view.
+
+    Default camera is angled from behind the table; the robot arm often blocks
+    the table during pick. A bird's-eye camera makes the scene legible.
+    """
+    # Camera straight above the workspace, pointing -Z (world down).
+    # Quaternion = 90deg rotation around +Y axis brings camera-+X (forward)
+    # onto world-(-Z), so the camera looks down.
+    pose = sapien.Pose(p=[0.05, 0.0, 0.85], q=[0.7071068, 0.0, 0.7071068, 0.0])
+    return CameraConfig("render_camera", pose, 768, 768, 1.0, 0.01, 100)
+
+
+_build2d.Build2DEnv._default_human_render_camera_configs = property(_topdown_render_camera)
 
 logger = logging.getLogger("taskbench.data.visualize")
 
