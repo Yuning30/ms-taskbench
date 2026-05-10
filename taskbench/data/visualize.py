@@ -60,11 +60,18 @@ def _topdown_render_camera(self):
     Default camera sits behind the robot, so the arm blocks the manipulation
     site during pick. Placing the camera on the far side of the grid keeps the
     target slots in the foreground, the source blocks visible, and the robot
-    in the background.
+    in the background — without flipping the world-up axis (so the image is
+    not upside down).
     """
-    # 135deg rotation around +Y: camera-+X (forward) maps to world-(-X, 0, -Z)
-    # normalized — i.e. looking back-and-down toward the robot at 45deg pitch.
-    pose = sapien.Pose(p=[0.45, 0.0, 0.42], q=[0.3826834, 0.0, 0.9238795, 0.0])
+    # Eye at (0.5, 0, 0.5), looking at origin (the workspace center) with
+    # world +Z as up. Forward = (-1, 0, -1)/sqrt(2); right = (0, 1, 0);
+    # up = (-1, 0, 1)/sqrt(2). The rotation that maps default camera frame
+    # (+X forward, +Y left, +Z up) onto these axes is a 180-deg rotation about
+    # the unit axis (-sin(22.5deg), 0, cos(22.5deg)) ≈ (-0.3827, 0, 0.9239).
+    pose = sapien.Pose(
+        p=[0.5, 0.0, 0.5],
+        q=[0.0, -0.3826834, 0.0, 0.9238795],  # [w, x, y, z]
+    )
     return CameraConfig("render_camera", pose, 768, 768, 1.0, 0.01, 100)
 
 
