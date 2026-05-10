@@ -54,15 +54,17 @@ from taskbench.skills.motion import setup_planner
 
 
 def _topdown_render_camera(self):
-    """Override Build2DEnv's render camera with a top-down view.
+    """Override Build2DEnv's render camera to view the workspace from the side
+    opposite the robot (the +X end of the table), looking back toward the robot.
 
-    Default camera is angled from behind the table; the robot arm often blocks
-    the table during pick. A bird's-eye camera makes the scene legible.
+    Default camera sits behind the robot, so the arm blocks the manipulation
+    site during pick. Placing the camera on the far side of the grid keeps the
+    target slots in the foreground, the source blocks visible, and the robot
+    in the background.
     """
-    # Camera straight above the workspace, pointing -Z (world down).
-    # Quaternion = 90deg rotation around +Y axis brings camera-+X (forward)
-    # onto world-(-Z), so the camera looks down.
-    pose = sapien.Pose(p=[0.05, 0.0, 0.85], q=[0.7071068, 0.0, 0.7071068, 0.0])
+    # 135deg rotation around +Y: camera-+X (forward) maps to world-(-X, 0, -Z)
+    # normalized — i.e. looking back-and-down toward the robot at 45deg pitch.
+    pose = sapien.Pose(p=[0.45, 0.0, 0.42], q=[0.3826834, 0.0, 0.9238795, 0.0])
     return CameraConfig("render_camera", pose, 768, 768, 1.0, 0.01, 100)
 
 
