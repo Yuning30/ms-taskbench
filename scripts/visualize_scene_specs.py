@@ -34,7 +34,7 @@ from taskbench.data.scene_specs import (
 
 GRID_ORIGIN_X = 0.05
 GRID_SPACING = 0.07
-PANDA_BASE_XY = (-0.615, 0.0)  # approximate; just for context arrow
+PANDA_BASE_XY = (-0.615, 0.0)  # Verified against env: raw.agent.robot.pose.p
 
 
 def _grid_target_xys(rows: int, cols: int):
@@ -86,12 +86,17 @@ def draw_scene(ax, spec, *, title: str = "", show_grid_targets: bool = True,
             ax.text(x, y, target_label, color="white", ha="center", va="center",
                     fontsize=8, fontweight="bold", zorder=4)
 
-    # Mark the robot base for context (just an annotation, not the actual robot footprint).
-    ax.scatter([0.0], [0.0], marker="P", s=60, c="#222", zorder=2)
-    ax.annotate("robot\nbase", (0.0, 0.0), xytext=(0.005, -0.015),
-                fontsize=6, color="#444")
+    # Mark world origin (table reference) and indicate where the Panda base
+    # actually sits (off-frame to the left of the workspace).
+    ax.scatter([0.0], [0.0], marker="+", s=60, c="#444", linewidths=1.2, zorder=2)
+    ax.text(0.005, -0.015, "world\norigin (0,0)", fontsize=6, color="#444")
+    # Arrow from inside the frame toward the (off-frame) Panda base at (-0.615, 0).
+    ax.annotate("", xy=(-0.66, 0.0), xytext=(-0.30, 0.0),
+                arrowprops=dict(arrowstyle="->", color="#1f77b4", lw=1.2))
+    ax.text(-0.62, 0.020, "Panda base\n(x=-0.615 m,\noff-frame)",
+            fontsize=6, color="#1f77b4", ha="left")
 
-    ax.set_xlim(-0.32, 0.32)
+    ax.set_xlim(-0.72, 0.32)
     ax.set_ylim(-0.30, 0.30)
     ax.set_aspect("equal")
     ax.set_title(title, fontsize=10)
