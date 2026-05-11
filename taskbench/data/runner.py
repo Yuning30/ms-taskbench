@@ -23,6 +23,7 @@ logger = logging.getLogger("taskbench.data.runner")
 # Map Pick failure_reason strings to a coarser leg label.
 _LEG_BY_REASON = {
     "grasp_plan_failed": "grasp_search",
+    "approach_blocked": "approach_blocked",
     "reach_failed": "reach",
     "grasp_approach_failed": "grasp_approach",
     "grasp_verification_failed": "grasp_verify",

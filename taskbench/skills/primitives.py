@@ -273,8 +273,48 @@ class Pick(Skill):
                 logger.warning("Failed to find a valid grasp pose")
                 return PickResult(success=False, failure_reason="grasp_plan_failed")
 
-            # Reach: approach from 0.05m behind grasp pose
-            reach_pose = grasp_pose * sapien.Pose([0, 0, -0.05])
+            # Adaptive pre-grasp standoff. Find the lowest block top above the
+            # target in a vertical column of ~5 cm radius around the target's xy,
+            # then back off the gripper to (ceiling - 1 cm) so reach doesn't
+            # collide with whatever is sitting directly above the target.
+            target_p = obj.pose.p
+            try:
+                target_p = target_p.cpu().numpy()
+            except Exception:
+                target_p = np.asarray(target_p)
+            target_p = np.asarray(target_p, dtype=np.float64).flatten()[:3]
+            column_radius = 0.05
+            target_top_z = float(target_p[2] + obj_size[2] / 2.0)
+            ceiling = float("inf")
+            for other_name, other in self.objects.items():
+                if other_name == obj_name:
+                    continue
+                op = other.pose.p
+                try:
+                    op = op.cpu().numpy()
+                except Exception:
+                    op = np.asarray(op)
+                op = np.asarray(op, dtype=np.float64).flatten()[:3]
+                if op[2] < 0.0:  # parked/padded below table
+                    continue
+                dxy = float(np.linalg.norm(op[:2] - target_p[:2]))
+                if dxy >= column_radius:
+                    continue
+                other_obb = get_actor_obb(other)
+                top_z = float(op[2] + np.asarray(other_obb.extents).max() / 2.0)
+                ceiling = min(ceiling, top_z)
+            if np.isfinite(ceiling):
+                # Set the standoff just under the ceiling; never below 2cm so
+                # the gripper has *some* room above the grasp pose. Tight cases
+                # are left for the motion planner to reject naturally rather
+                # than aborting up front.
+                clearance = ceiling - target_top_z
+                standoff = float(np.clip(clearance - 0.005, 0.02, 0.12))
+            else:
+                standoff = 0.05  # default
+
+            # Reach: approach from `standoff` behind grasp pose
+            reach_pose = grasp_pose * sapien.Pose([0, 0, -standoff])
             result = move(reach_pose)
             if not result.success:
                 return PickResult(success=False, failure_reason="reach_failed")
