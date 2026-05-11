@@ -134,6 +134,47 @@ def build_splits(
     return paths
 
 
+def build_calibration_split(
+    *,
+    eval_path: Path,
+    out_dir: Path,
+    calib_n: int = 10_000,
+    seed: int = 42,
+    rebuild: bool = False,
+) -> dict[str, Path]:
+    """Carve a stratified-by-source calibration slice off the eval split.
+
+    Reads eval.parquet, samples calib_n rows stratified by source, writes:
+        out_dir/calib.parquet         (calib_n rows)
+        out_dir/eval_holdout.parquet  (rest)
+    Leaves eval.parquet untouched.
+    """
+    calib_p = out_dir / "calib.parquet"
+    holdout_p = out_dir / "eval_holdout.parquet"
+    if not rebuild and calib_p.exists() and holdout_p.exists():
+        return {"calib": calib_p, "eval_holdout": holdout_p}
+
+    table = pq.read_table(eval_path)
+    n = table.num_rows
+    sources = np.asarray(table.column("source").to_pylist())
+    rng = np.random.default_rng(seed)
+
+    p_calib = calib_n / n
+    calib_idx_parts = []
+    for src in np.unique(sources):
+        idxs = np.where(sources == src)[0]
+        rng.shuffle(idxs)
+        k = int(round(len(idxs) * p_calib))
+        calib_idx_parts.append(idxs[:k])
+    calib_idx = np.sort(np.concatenate(calib_idx_parts))
+    holdout_idx = np.setdiff1d(np.arange(n), calib_idx, assume_unique=True)
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    pq.write_table(table.take(pa.array(calib_idx)), calib_p)
+    pq.write_table(table.take(pa.array(holdout_idx)), holdout_p)
+    return {"calib": calib_p, "eval_holdout": holdout_p}
+
+
 @dataclass
 class _Features:
     X: torch.Tensor  # (N, FEATURE_DIM) float32
