@@ -292,6 +292,75 @@ def detach_object(planner):
     logger.debug("Detached object from end effector")
 
 
+# ---------------------------------------------------------------------------
+# Scene-block collision obstacles (free blocks the planner doesn't know about)
+# ---------------------------------------------------------------------------
+
+_BLOCK_OBSTACLES_NAME = "block_obstacles"
+
+
+def _block_volume_points(p_xyz, q_wxyz, half_extents, resolution=0.01):
+    """Dense grid of world-frame points sampled from a block's volume."""
+    from transforms3d.quaternions import quat2mat
+    # Local axis-aligned grid sized to the block's extents.
+    axes = []
+    for half in half_extents:
+        n = max(int(np.ceil(2.0 * half / resolution)) + 1, 2)
+        axes.append(np.linspace(-half, +half, n))
+    xx, yy, zz = np.meshgrid(*axes, indexing="ij")
+    local = np.stack([xx.ravel(), yy.ravel(), zz.ravel()], axis=1)
+    R = quat2mat(np.asarray(q_wxyz, dtype=np.float64))
+    return (local @ R.T) + np.asarray(p_xyz, dtype=np.float64)
+
+
+def set_scene_block_obstacles(env, planner, objects, *,
+                              exclude: str | None = None,
+                              resolution: float = 0.01) -> bool:
+    """Register all non-excluded scene blocks as a planner collision point cloud.
+
+    Returns True iff at least one block was registered (so the caller knows
+    to call remove_scene_block_obstacles in a finally). Blocks parked below
+    the table (padded slots in templated scenes) are skipped.
+    """
+    from mani_skill.examples.motionplanning.base_motionplanner.utils import get_actor_obb
+
+    parts: list[np.ndarray] = []
+    for name, obj in objects.items():
+        if exclude is not None and name == exclude:
+            continue
+        p = obj.pose.p
+        q = obj.pose.q
+        try:
+            p = p.cpu().numpy()
+        except Exception:
+            p = np.asarray(p)
+        try:
+            q = q.cpu().numpy()
+        except Exception:
+            q = np.asarray(q)
+        p = np.asarray(p, dtype=np.float64).flatten()[:3]
+        q = np.asarray(q, dtype=np.float64).flatten()[:4]
+        if p[2] < 0.0:  # Skip padded / parked-below-table slots.
+            continue
+        half = np.asarray(get_actor_obb(obj).extents, dtype=np.float64) / 2.0
+        parts.append(_block_volume_points(p, q, half, resolution=resolution))
+
+    if not parts:
+        return False
+    pts = np.concatenate(parts, axis=0)
+    planner.update_point_cloud(pts, resolution=resolution, name=_BLOCK_OBSTACLES_NAME)
+    logger.debug("Registered %d block-obstacle points", pts.shape[0])
+    return True
+
+
+def remove_scene_block_obstacles(planner) -> None:
+    """Unregister the block obstacle point cloud, if present."""
+    try:
+        planner.remove_point_cloud(name=_BLOCK_OBSTACLES_NAME)
+    except Exception as exc:
+        logger.debug("remove_scene_block_obstacles ignored: %s", exc)
+
+
 def move_to_pose(env, planner, pose, gripper_state, robot_config: RobotConfig,
                  dry_run=False, monitor_contacts=False, step_callback=None):
     """Plan and execute a straight-line motion to target pose.

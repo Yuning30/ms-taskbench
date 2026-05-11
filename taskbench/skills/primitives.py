@@ -30,6 +30,8 @@ from taskbench.skills.motion import (
     attach_object,
     detach_object,
     move_to_pose,
+    remove_scene_block_obstacles,
+    set_scene_block_obstacles,
     to_sapien_pose,
 )
 from taskbench.skills.robot_config import RobotConfig, get_robot_config
@@ -222,86 +224,97 @@ class Pick(Skill):
         raw = env.unwrapped
         move = Move(env, planner, robot_config=rc, step_callback=self.step_callback)
 
-        # Compute grasp pose from OBB.
-        # target_closing is fixed to the world y-axis so the grasp pose is a
-        # pure function of (actor.pose, actor.shape) — independent of the
-        # robot's current orientation. This is required for the data we feed
-        # into the verifier to be a deterministic function of the scene.
-        obb = get_actor_obb(obj)
-        obj_size = np.asarray(obb.extents, dtype=np.float64)
-        approaching = np.array([0, 0, -1])
-        target_closing = np.array([0.0, 1.0, 0.0])
-        grasp_info = compute_grasp_info_by_obb(
-            obb,
-            approaching=approaching,
-            target_closing=target_closing,
-            depth=rc.finger_length,
+        # Register every other free block as a planner collision obstacle so
+        # plan_screw rejects paths that would clip them BEFORE the contact
+        # monitor catches them mid-execution. Always cleaned up in finally.
+        block_obstacles_added = set_scene_block_obstacles(
+            env, planner, self.objects, exclude=obj_name,
         )
-        closing, center = grasp_info["closing"], grasp_info["center"]
-        grasp_pose = raw.agent.build_grasp_pose(approaching, closing, center)
-
-        # Search 6 rotation candidates for collision-free orientation
-        angles = np.array([0, np.pi/6, -np.pi/6, np.pi/3, -np.pi/3, np.pi/2])
-
-        grasp_found = False
-        for angle in angles:
-            delta_pose = sapien.Pose(q=euler2quat(0, 0, angle))
-            candidate = grasp_pose * delta_pose
-            res = move_to_pose(env, planner, candidate, rc.gripper_open, rc,
-                               dry_run=True)
-            if res is None:
-                continue
-            grasp_pose = candidate
-            grasp_found = True
-            break
-
-        if not grasp_found:
-            logger.warning("Failed to find a valid grasp pose")
-            return PickResult(success=False, failure_reason="grasp_plan_failed")
-
-        # Reach: approach from 0.05m behind grasp pose
-        reach_pose = grasp_pose * sapien.Pose([0, 0, -0.05])
-        result = move(reach_pose)
-        if not result.success:
-            return PickResult(success=False, failure_reason="reach_failed")
-
-        # Grasp: move to grasp pose
-        result = move(grasp_pose)
-        if not result.success:
-            return PickResult(success=False, failure_reason="grasp_approach_failed")
-
-        # Close gripper
-        actuate_gripper(env, planner, rc.gripper_closed,
-                        step_callback=self.step_callback)
-
-        # Verify grasp
-        if verify_grasp:
-            is_holding = raw.agent.is_grasping(obj)
-            if not bool(is_holding.cpu().numpy().item()):
-                logger.warning("Grasp verification failed")
-                return PickResult(success=False,
-                                  failure_reason="grasp_verification_failed")
-
-        # Lift (contacts off — gripper is holding the object)
-        lift_pose = sapien.Pose([0, 0, lift_height]) * grasp_pose
-        result = move(lift_pose, gripper_open=False, monitor_contacts=False)
-        if not result.success:
-            return PickResult(
-                success=False,
-                failure_reason="lift_failed",
-                grasp_pose=grasp_pose,
+        try:
+            # Compute grasp pose from OBB.
+            # target_closing is fixed to the world y-axis so the grasp pose is
+            # a pure function of (actor.pose, actor.shape) — independent of the
+            # robot's current orientation. This is required for the data we
+            # feed into the verifier to be a deterministic function of the
+            # scene.
+            obb = get_actor_obb(obj)
+            obj_size = np.asarray(obb.extents, dtype=np.float64)
+            approaching = np.array([0, 0, -1])
+            target_closing = np.array([0.0, 1.0, 0.0])
+            grasp_info = compute_grasp_info_by_obb(
+                obb,
+                approaching=approaching,
+                target_closing=target_closing,
+                depth=rc.finger_length,
             )
+            closing, center = grasp_info["closing"], grasp_info["center"]
+            grasp_pose = raw.agent.build_grasp_pose(approaching, closing, center)
 
-        # Tell planner about the held object for collision-aware planning
-        attach_object(planner, obj_size)
+            # Search 6 rotation candidates for collision-free orientation
+            angles = np.array([0, np.pi/6, -np.pi/6, np.pi/3, -np.pi/3, np.pi/2])
 
-        return PickResult(
-            success=True,
-            grasp_pose=grasp_pose,
-            lift_pose=lift_pose,
-            obj_size=obj_size,
-            step_result=result.step_result,
-        )
+            grasp_found = False
+            for angle in angles:
+                delta_pose = sapien.Pose(q=euler2quat(0, 0, angle))
+                candidate = grasp_pose * delta_pose
+                res = move_to_pose(env, planner, candidate, rc.gripper_open, rc,
+                                   dry_run=True)
+                if res is None:
+                    continue
+                grasp_pose = candidate
+                grasp_found = True
+                break
+
+            if not grasp_found:
+                logger.warning("Failed to find a valid grasp pose")
+                return PickResult(success=False, failure_reason="grasp_plan_failed")
+
+            # Reach: approach from 0.05m behind grasp pose
+            reach_pose = grasp_pose * sapien.Pose([0, 0, -0.05])
+            result = move(reach_pose)
+            if not result.success:
+                return PickResult(success=False, failure_reason="reach_failed")
+
+            # Grasp: move to grasp pose
+            result = move(grasp_pose)
+            if not result.success:
+                return PickResult(success=False, failure_reason="grasp_approach_failed")
+
+            # Close gripper
+            actuate_gripper(env, planner, rc.gripper_closed,
+                            step_callback=self.step_callback)
+
+            # Verify grasp
+            if verify_grasp:
+                is_holding = raw.agent.is_grasping(obj)
+                if not bool(is_holding.cpu().numpy().item()):
+                    logger.warning("Grasp verification failed")
+                    return PickResult(success=False,
+                                      failure_reason="grasp_verification_failed")
+
+            # Lift (contacts off — gripper is holding the object)
+            lift_pose = sapien.Pose([0, 0, lift_height]) * grasp_pose
+            result = move(lift_pose, gripper_open=False, monitor_contacts=False)
+            if not result.success:
+                return PickResult(
+                    success=False,
+                    failure_reason="lift_failed",
+                    grasp_pose=grasp_pose,
+                )
+
+            # Tell planner about the held object for collision-aware planning
+            attach_object(planner, obj_size)
+
+            return PickResult(
+                success=True,
+                grasp_pose=grasp_pose,
+                lift_pose=lift_pose,
+                obj_size=obj_size,
+                step_result=result.step_result,
+            )
+        finally:
+            if block_obstacles_added:
+                remove_scene_block_obstacles(planner)
 
 
 # ---------------------------------------------------------------------------
