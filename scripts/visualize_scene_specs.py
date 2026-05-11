@@ -86,15 +86,12 @@ def draw_scene(ax, spec, *, title: str = "", show_grid_targets: bool = True,
             ax.text(x, y, target_label, color="white", ha="center", va="center",
                     fontsize=8, fontweight="bold", zorder=4)
 
-    # Mark world origin (table reference) and indicate where the Panda base
-    # actually sits (off-frame to the left of the workspace).
-    ax.scatter([0.0], [0.0], marker="+", s=60, c="#444", linewidths=1.2, zorder=2)
-    ax.text(0.005, -0.015, "world\norigin (0,0)", fontsize=6, color="#444")
-    # Arrow from inside the frame toward the (off-frame) Panda base at (-0.615, 0).
-    ax.annotate("", xy=(-0.66, 0.0), xytext=(-0.30, 0.0),
-                arrowprops=dict(arrowstyle="->", color="#1f77b4", lw=1.2))
-    ax.text(-0.62, 0.020, "Panda base\n(x=-0.615 m,\noff-frame)",
-            fontsize=6, color="#1f77b4", ha="left")
+    # Panda robot base at its actual mount point.
+    ax.scatter([PANDA_BASE_XY[0]], [PANDA_BASE_XY[1]],
+               marker="o", s=90, c="#1f77b4", edgecolor="#0d3a66",
+               linewidths=1.0, zorder=2)
+    ax.text(PANDA_BASE_XY[0], PANDA_BASE_XY[1] + 0.025, "Panda base",
+            fontsize=6, color="#1f77b4", ha="center")
 
     ax.set_xlim(-0.72, 0.32)
     ax.set_ylim(-0.30, 0.30)
