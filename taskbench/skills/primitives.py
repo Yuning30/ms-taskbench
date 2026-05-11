@@ -250,8 +250,12 @@ class Pick(Skill):
             closing, center = grasp_info["closing"], grasp_info["center"]
             grasp_pose = raw.agent.build_grasp_pose(approaching, closing, center)
 
-            # Search 6 rotation candidates for collision-free orientation
-            angles = np.array([0, np.pi/6, -np.pi/6, np.pi/3, -np.pi/3, np.pi/2])
+            # Search 12 rotation candidates evenly spaced around the full
+            # circle, ordered by distance from 0 so cheap "default" wrist
+            # yaws still try first.
+            _step = np.pi / 6  # 30 degrees
+            angles = np.array([k * _step for k in
+                               [0, 1, -1, 2, -2, 3, -3, 4, -4, 5, -5, 6]])
 
             grasp_found = False
             for angle in angles:
