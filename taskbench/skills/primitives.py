@@ -222,13 +222,15 @@ class Pick(Skill):
         raw = env.unwrapped
         move = Move(env, planner, robot_config=rc, step_callback=self.step_callback)
 
-        # Compute grasp pose from OBB
+        # Compute grasp pose from OBB.
+        # target_closing is fixed to the world y-axis so the grasp pose is a
+        # pure function of (actor.pose, actor.shape) — independent of the
+        # robot's current orientation. This is required for the data we feed
+        # into the verifier to be a deterministic function of the scene.
         obb = get_actor_obb(obj)
         obj_size = np.asarray(obb.extents, dtype=np.float64)
         approaching = np.array([0, 0, -1])
-        target_closing = (
-            raw.agent.tcp.pose.to_transformation_matrix()[0, :3, 1].cpu().numpy()
-        )
+        target_closing = np.array([0.0, 1.0, 0.0])
         grasp_info = compute_grasp_info_by_obb(
             obb,
             approaching=approaching,

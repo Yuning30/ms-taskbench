@@ -48,7 +48,7 @@ class Build2DEnv(TaskEnv):
         self,
         *args,
         robot_uids="panda_wristcam",
-        robot_init_qpos_noise=0.02,
+        robot_init_qpos_noise=0.0,
         grid_rows: int = 3,
         grid_cols: int = 3,
         **kwargs,
