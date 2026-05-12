@@ -328,3 +328,64 @@ Further progress requires fundamentally different approaches:
 3. Change the gripper - wider finger pads or a 3-finger design would
    structurally fix the asymmetric-contact slip mode.
 
+## c16 - combo (c9 + c11 + c12_k5) - marginal effects do NOT compound
+
+The two marginal wins from earlier (c11 two-stage close gave +2, c12 wrist 5x
+gave +1) were stacked to see if they compound.
+
+| variant | success | slip | mean wall |
+|---|---:|---:|---:|
+| c9 (baseline) | 402/500 (80.4%) | 32 | 1.59 s |
+| c11 alone | 404/500 (80.8%) | 30 | 1.77 s |
+| c12_k5 alone | 403/500 (80.6%) | 31 | 1.62 s |
+| **c16 combo** | **403/500 (80.6%)** | **31** | **4.62 s** |
+
+The combo matches c12_k5 alone (+1 over c9) at nearly 3x the wall-clock cost.
+The marginal effects do NOT compound; they were within physics-simulation
+noise to begin with.
+
+30 of 32 c9 slips persist in c16. The slip set is essentially invariant
+across all c9-family variants - it is a true property of the (Panda +
+contact engine + 4cm cube + workspace edge) interaction.
+
+## Workspace-rejection analysis (no-eval, computed from c9 data)
+
+| threshold (robot-frame x) | rejected | kept | kept_succ% | overall_succ (honest) |
+|---|---:|---:|---:|---:|
+| 0.60 m | 295 | 205 | **99.5%** | 40.8% |
+| 0.65 | 216 | 284 | 97.2% | 55.2% |
+| 0.70 | 176 | 324 | 95.7% | 62.0% |
+| 0.75 | 123 | 377 | 93.4% | 70.4% |
+| 0.80 | 82 | 418 | 92.6% | 77.4% |
+| 0.85 | 32 | 468 | 85.9% | 80.4% |
+| no reject (c9) | 0 | 500 | 80.4% | 80.4% |
+
+**Free win**: at threshold 0.85, all 32 flagged scenes are 100% plan_fails
+(zero successes, zero slips). Rejecting these saves ~64s of compute
+without losing any actual successes.
+
+For deployment: pick the threshold based on cost-per-failure trade-off.
+For data collection: don't reject (you want labels on hard scenes too).
+
+For analytical slip prediction: a single x-threshold catches 25-78% of
+slips at corresponding precision 33-97%. Better slip prediction needs
+multivariate features (the verifier story).
+
+## Truly final state
+
+Production controller: **c9** = 402/500 (80.4%), 1.59 s/sample mean.
++104 successes / +20.8pp / 56% faster than mplib v6.
+
+Ten experiments past c9 (c10-c16, c14b, c15, c16 combo) all confirm:
+**no single-parameter or simple-combination intervention on the
+controller or simulator can reduce the 32 residual slip failures.**
+
+Further progress requires either:
+1. **Free win**: pre-reject targets at x > 0.85m (all plan_fails anyway).
+2. **Operational**: workspace rejection at lower thresholds, trading
+   attempted scenes for higher reliability.
+3. **Verifier on c9 data**: multivariate slip predictor on (target_x,
+   neighbor_count, grasp_pose_features). 6.4% minority-class problem.
+4. **Hardware**: wider finger pads or 3-finger gripper would
+   structurally fix the asymmetric-contact mode.
+
