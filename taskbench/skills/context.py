@@ -71,7 +71,16 @@ class SkillContext:
         # across resets; the scene is re-synced inside Pick via sync_scene().
         if self._use_curobo and self.curobo_planner is None:
             from taskbench.skills.curobo_planner import CuroboPlanner
-            self.curobo_planner = CuroboPlanner(self.env)
+            # c13: optional tighter IK precision for the position/orientation
+            # tolerance (defaults 5mm / ~3deg). Tighter = more accurate
+            # gripper-to-cube alignment at the grasp pose but may fail more
+            # plans at extended reach.
+            kw = {}
+            if (v := os.environ.get("TASKBENCH_CUROBO_POS_TOL")) is not None:
+                kw["position_tolerance"] = float(v)
+            if (v := os.environ.get("TASKBENCH_CUROBO_ORI_TOL")) is not None:
+                kw["orientation_tolerance"] = float(v)
+            self.curobo_planner = CuroboPlanner(self.env, **kw)
         self.objects = get_objects(self.env)
         self._build_skills()
 

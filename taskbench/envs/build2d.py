@@ -129,6 +129,11 @@ class Build2DEnv(TaskEnv):
         self.grid_head = node_matrix[0][0]
 
         # Movable blocks (one per cell), initialized high and re-positioned on reset.
+        # c14: optional TASKBENCH_CUBE_FRICTION env var bumps the cube collision
+        # material friction. SAPIEN defaults to ~0.5; for our 4cm cubes with a
+        # narrow gripper, raising this to 1.5-2.0 reduces close-time slip.
+        import os as _os
+        _cube_mu = _os.environ.get("TASKBENCH_CUBE_FRICTION")
         for i in range(self.grid_rows):
             for j in range(self.grid_cols):
                 block = actors.build_cube(
@@ -138,6 +143,17 @@ class Build2DEnv(TaskEnv):
                     name=f"block_{i}_{j}",
                     initial_pose=sapien.Pose(p=[-0.2, 0, 0.2]),
                 )
+                if _cube_mu is not None:
+                    mu = float(_cube_mu)
+                    import sapien.physx as _physx
+                    for actor in block._objs:
+                        comp = actor.find_component_by_type(_physx.PhysxRigidDynamicComponent)
+                        if comp is None:
+                            continue
+                        for shape in comp.collision_shapes:
+                            mat = shape.physical_material
+                            mat.static_friction = mu
+                            mat.dynamic_friction = mu
                 self.blocks.append(block)
 
     def _initialize_episode(self, env_idx: torch.Tensor, options: dict):

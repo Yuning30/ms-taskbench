@@ -89,6 +89,8 @@ class CuroboPlanner:
         num_ik_seeds: int = 64,
         random_seed: int = 123,
         optimizer_collision_activation_distance: float = 0.005,
+        position_tolerance: float = 0.005,
+        orientation_tolerance: float = 0.05,
     ):
         # Lazy-imported so the rest of taskbench is usable without curobo installed.
         from curobo.motion_planner import MotionPlanner, MotionPlannerCfg
@@ -113,6 +115,8 @@ class CuroboPlanner:
             num_ik_seeds=num_ik_seeds,
             random_seed=random_seed,
             optimizer_collision_activation_distance=optimizer_collision_activation_distance,
+            position_tolerance=position_tolerance,
+            orientation_tolerance=orientation_tolerance,
         )
         self._planner = MotionPlanner(cfg)
         self._planner.warmup(enable_graph=True, num_warmup_iterations=5)

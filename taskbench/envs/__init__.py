@@ -24,6 +24,19 @@ if _wrist_k != 1.0 or _wrist_d != 1.0:
     PandaWristCam.arm_stiffness = _stiff
     PandaWristCam.arm_damping = _damp
 
+# c15: gripper finger PD gains (defaults 1e3 / 1e2). Multiplies both fingers
+# uniformly. Softer = gentler close, less impulse on the cube; stiffer = faster
+# close, more squeeze force.
+_grip_k = float(os.environ.get("TASKBENCH_PANDA_GRIPPER_STIFFNESS_MULT", "1.0"))
+_grip_d = float(os.environ.get("TASKBENCH_PANDA_GRIPPER_DAMPING_MULT", "1.0"))
+if _grip_k != 1.0 or _grip_d != 1.0:
+    from mani_skill.agents.robots.panda.panda import Panda
+    from mani_skill.agents.robots.panda.panda_wristcam import PandaWristCam
+    Panda.gripper_stiffness = 1e3 * _grip_k
+    Panda.gripper_damping = 1e2 * _grip_d
+    PandaWristCam.gripper_stiffness = 1e3 * _grip_k
+    PandaWristCam.gripper_damping = 1e2 * _grip_d
+
 import taskbench.envs.bin_with_objects  # noqa: F401 — triggers env registration
 import taskbench.envs.build2d  # noqa: F401 — triggers env registration
 import taskbench.envs.shelf_env  # noqa: F401 — triggers env registration

@@ -17,6 +17,11 @@ export TASKBENCH_CUROBO_SETTLE_STEPS="${SETTLE:-0}"
 export TASKBENCH_CUROBO_TWO_STAGE_CLOSE="${TWO_STAGE:-0}"
 export TASKBENCH_PANDA_WRIST_STIFFNESS_MULT="${WRIST_K:-1.0}"
 export TASKBENCH_PANDA_WRIST_DAMPING_MULT="${WRIST_D:-1.0}"
+if [ -n "${POS_TOL:-}" ]; then export TASKBENCH_CUROBO_POS_TOL="${POS_TOL}"; fi
+if [ -n "${ORI_TOL:-}" ]; then export TASKBENCH_CUROBO_ORI_TOL="${ORI_TOL}"; fi
+if [ -n "${CUBE_MU:-}" ]; then export TASKBENCH_CUBE_FRICTION="${CUBE_MU}"; fi
+if [ -n "${GRIP_K:-}" ]; then export TASKBENCH_PANDA_GRIPPER_STIFFNESS_MULT="${GRIP_K}"; fi
+if [ -n "${GRIP_D:-}" ]; then export TASKBENCH_PANDA_GRIPPER_DAMPING_MULT="${GRIP_D}"; fi
 
 cd /common/home/st1122/Projects/ms-taskbench
 
