@@ -11,6 +11,8 @@ export PATH="$CUDA_HOME/bin:$PATH"
 export TASKBENCH_MOTION_BACKEND=curobo
 export TASKBENCH_CUROBO_TOPK="${TOPK:-0}"
 export TASKBENCH_CUROBO_INVERT="${INVERT:-0}"
+export TASKBENCH_CUROBO_GRIPPER_STEPS="${GSTEPS:-6}"
+export TASKBENCH_CUROBO_FINGER_COLL="${FINGER_COLL:-0}"
 
 cd /common/home/st1122/Projects/ms-taskbench
 

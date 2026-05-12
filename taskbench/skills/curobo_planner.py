@@ -258,6 +258,7 @@ class CuroboPlanner:
         *,
         grasp_approach_offset: float = 0.10,
         grasp_lift_offset: float = 0.12,
+        disable_collision_links: Optional[List[str]] = None,
     ):
         """Plan a three-phase grasp using a goal-set of candidate TCP poses.
 
@@ -304,15 +305,16 @@ class CuroboPlanner:
         q_t = torch.tensor(current_qpos_arm, device="cuda", dtype=torch.float32).unsqueeze(0)
         q_start = JointState.from_position(q_t, joint_names=self._planner.joint_names)
         self.reset_seed()
-        result = self._planner.plan_grasp(
-            goal,
-            q_start,
+        plan_kw = dict(
             grasp_approach_offset=-float(grasp_approach_offset),
             grasp_lift_offset=-float(grasp_lift_offset),
             plan_approach_to_grasp=True,
             plan_grasp_to_lift=True,
             grasp_lift_in_tool_frame=True,
         )
+        if disable_collision_links is not None:
+            plan_kw["disable_collision_links"] = list(disable_collision_links)
+        result = self._planner.plan_grasp(goal, q_start, **plan_kw)
         if result is None or result.success is None or not bool(result.success.any()):
             logger.debug(
                 "plan_grasp returned no success: status=%s approach=%s grasp=%s lift=%s",

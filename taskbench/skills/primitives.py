@@ -11,6 +11,7 @@ dataclass result with ``success`` and ``failure_reason`` fields.
 """
 
 import logging
+import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Callable, Optional
@@ -520,10 +521,19 @@ class Pick(Skill):
             for c in candidates
         ]
         arm_q = env.unwrapped.agent.robot.get_qpos().cpu().numpy().flatten()[:7]
+        # c9: TASKBENCH_CUROBO_FINGER_COLL=1 keeps the panda fingers in cuRobo's
+        # collision world during the grasp phase. By default cuRobo disables
+        # finger collisions so the gripper can reach into tight spaces; that
+        # lets fingers physically interfere with neighbor blocks at grasp time
+        # in our crowded scenes.
+        plan_kwargs = {}
+        if os.environ.get("TASKBENCH_CUROBO_FINGER_COLL", "0") == "1":
+            plan_kwargs["disable_collision_links"] = ["panda_hand", "attached_object"]
         result = self.curobo_planner.plan_grasp_set(
             cand_pq, arm_q,
             grasp_approach_offset=standoff,
             grasp_lift_offset=lift_height,
+            **plan_kwargs,
         )
         if result is None:
             return PickResult(success=False, failure_reason="grasp_plan_failed")
@@ -566,8 +576,13 @@ class Pick(Skill):
             step_callback=self.step_callback,
         )
 
-        # Close gripper.
+        # Close gripper. c8: env var TASKBENCH_CUROBO_GRIPPER_STEPS bumps the
+        # number of hold-steps from the default 6 so contact physics has time
+        # to settle before grasp_verify runs.
+        import os as _os
+        _gsteps = int(_os.environ.get("TASKBENCH_CUROBO_GRIPPER_STEPS", "6"))
         actuate_gripper(env, self.planner, rc.gripper_closed,
+                        steps=_gsteps,
                         step_callback=self.step_callback)
 
         # Verify grasp.
