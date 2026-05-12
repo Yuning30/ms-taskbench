@@ -68,3 +68,41 @@ Failure modes for c5/c6:
 - Per-stage results: `outputs/controller_eval/c[0-6]_*.parquet`.
 - This summary: `outputs/controller_eval/SUMMARY_curobo.{csv,md}`.
 - cuRobo install: `/common/home/st1122/Projects/third_party/curobo` (editable). Use the `[curobo]` extra: `uv pip install -e "taskbench[curobo]"`.
+
+## c7 — slip-avoidance scoring (negative result)
+
+Hypothesis: pre-score grasp candidates by a geometric slip cost
+(approach tilt + yaw-mod-90), sort ascending, truncate to top-K.
+cuRobo then picks the lowest-trajectory-cost candidate among the
+"more-stable" subset.
+
+| variant | success | grasp_plan | grasp_verify | mean wall |
+|---|---:|---:|---:|---:|
+| c5_relax_expand (baseline) | 373/500 (74.6%) | 81 | 46 | 2.31 s |
+| c7_slip_k72 | 373/500 (74.6%) | 81 | 46 | 1.88 s |
+| c7_slip_k48 | 369/500 (73.8%) | 84 | 47 | 2.15 s |
+| c7_slip_k24 | 362/500 (72.4%) | 84 | 54 | 1.87 s |
+| c7_slip_k24inv | 364/500 (72.8%) | 84 | 52 | 2.18 s |
+| c7_slip_k12 | 353/500 (70.6%) | 87 | 60 | 2.17 s |
+
+**Findings:**
+- The cost is not predictive: truncation hurts BOTH grasp feasibility
+  AND slip rate.
+- Direction barely matters (k24 vs k24inv differ by 2 slips).
+- Block-orientation histogram of c5 slip failures shows the OPPOSITE
+  pattern: axis-aligned blocks slip MOST (14.4% at 0-5deg), highly-rotated
+  blocks slip LEAST (0% at 30-35deg). Static geometric features of the
+  candidate grasp are not what drives grasp_verify failures here.
+
+**Implication:** the user's intuition - "score grasps by wrist-axis
+alignment with block-axis" - is what we tried; it doesn't earn its
+keep on this controller. The remaining 46 slip failures likely depend
+on wrist configuration during gripper closure (a TRAJECTORY-level
+property, not a candidate-level one) or on scene-density effects
+correlated with block orientation.
+
+cuRobo's trajopt cost - which we don't pre-filter - is already a
+better slip predictor than any simple geometric heuristic. Code is
+kept env-var-gated (TASKBENCH_CUROBO_TOPK, _INVERT) for future
+experiments; default behavior is unchanged.
+

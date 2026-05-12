@@ -6,3 +6,8 @@ c3_batched_grasp,c3: batched 36-pose goal-set grasp synthesis,328,0.6560,0.7086,
 c4_plan_grasp,c4: full three-phase plan_grasp,367,0.7340,0.7457,0.7300,0.6600,2.33,3.67,5.27,84,0,0,49,0
 c5_relax_expand,c5: relax collision margin + 24 yaws (72 candidates),373,0.7460,0.7629,0.7300,0.6600,2.31,3.63,4.61,81,0,0,46,0
 c6_more_seeds,c6: double IK/trajopt seeds (no-op),373,0.7460,0.7657,0.7200,0.6600,2.33,3.63,4.65,81,0,0,46,0
+c7_slip_k72,c7: slip cost reorder only (k=72, no truncation),373,0.7460,0.7657,0.7200,0.6600,1.88,4.73,7.78,81,0,0,46,0
+c7_slip_k48,c7: slip cost top-48 (mild filter),369,0.7380,0.7514,0.7200,0.6800,2.15,3.30,3.91,84,0,0,47,0
+c7_slip_k24,c7: slip cost top-24 (aggressive filter),362,0.7240,0.7400,0.7100,0.6400,1.87,4.61,7.11,84,0,0,54,0
+c7_slip_k24inv,c7: slip cost top-24 INVERTED (sanity check),364,0.7280,0.7314,0.7500,0.6600,2.18,3.27,4.06,84,0,0,52,0
+c7_slip_k12,c7: slip cost top-12 (very aggressive filter),353,0.7060,0.7229,0.6800,0.6400,2.17,3.29,3.97,87,0,0,60,0
