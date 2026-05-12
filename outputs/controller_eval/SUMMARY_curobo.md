@@ -249,3 +249,82 @@ limitation honestly.
 Final production controller: **c9 = 402/500 (80.4%), 1.59 s/sample,
 +104 vs mplib v6.** c11 is an opt-in alternative for +2 at +11% cost.
 
+## c12-c15 - exhaustive single-parameter sweep past c9
+
+After c11's marginal +2, we tested five more single-parameter axes to
+see if any could move the 32 grasp_verify_failures in c9. **All null
+or worse.**
+
+### c12 - wrist PD stiffness (joints 5/6/7)
+Hypothesis: wrist drift under close-torque at extended reach.
+
+| mult | success | slip |
+|---|---:|---:|
+| 1x (c9) | 402 | 32 |
+| 2x | 402 | 32 |
+| 5x | 403 | 31 |
+| 10x | 402 | 32 |
+
+Wrist drift is not the mechanism.
+
+### c13 - cuRobo IK position tolerance
+Hypothesis: 5mm default lets the optimizer land off-center on the 4cm cube.
+
+| pos_tol | success | plan_fail | slip |
+|---|---:|---:|---:|
+| 5mm (c9 default) | 402 | 66 | 32 |
+| 2mm | 395 | 73 | 32 |
+| 1mm | 394 | 75 | 31 |
+
+Tighter tolerance refuses 7-9 more plans but the 32 slips persist.
+
+### c14 - cube friction
+Hypothesis: low friction lets the cube slip out; high friction grabs better.
+
+| mu | success | slip |
+|---|---:|---:|
+| 0.1 | 399 | 35 |
+| 0.3 | 402 | 32 |
+| 0.5 (default) | 402 | 32 |
+| 1.5 | 396 | 38 |
+| 3.0 | 368 | 66 |
+
+Default is at a local optimum. High friction makes things much worse
+because the cube STICKS to the first finger that contacts it and gets
+dragged off-center.
+
+### c15 - gripper finger PD
+Hypothesis: softer close lets cube settle into jaws; stiffer grips harder.
+
+| mult | success | slip | mean wall |
+|---|---:|---:|---:|
+| 0.3x (soft) | 396 | 38 | 5.51 s |
+| 1x (c9) | 402 | 32 | 1.59 s |
+| 3x (stiff) | 400 | 34 | 1.53 s |
+
+Default is again the local optimum.
+
+## Final conclusion: c9 is at a structural ceiling
+
+Across nine independent axes - candidate scoring, close timing, settle,
+two-stage close, wrist PD, IK tolerance, cube friction (both ways), and
+gripper PD - **no single-parameter intervention shifts the 32 slip
+failures**. The default ManiSkill configuration with c9's finger-collision
+fix is at a local optimum on all of them.
+
+The 6.4% residual slip rate is determined by:
+- Panda kinematic limits at extended reach (cant be tuned)
+- The 2-finger gripper geometry vs 4cm cube (would require hardware change)
+- ManiSkill's contact engine at near-singular wrist configs
+
+Production controller: **c9** = 402/500 (80.4%), 1.59 s/sample mean.
++104 / +20.8pp / 56% faster than mplib v6.
+
+Further progress requires fundamentally different approaches:
+1. Reject target_x > 0.75m at scene-feasibility check time (-25 of 32 slips honestly relabeled, no execution cost).
+2. Re-collect verifier data on c9; train a slip predictor on the
+   remaining 32 cases. The problem is now a ~6.4% minority-class
+   detection problem.
+3. Change the gripper - wider finger pads or a 3-finger design would
+   structurally fix the asymmetric-contact slip mode.
+
