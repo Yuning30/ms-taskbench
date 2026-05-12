@@ -584,13 +584,21 @@ class Pick(Skill):
         )
 
         # Close gripper. c8: env var TASKBENCH_CUROBO_GRIPPER_STEPS bumps the
-        # number of hold-steps from the default 6 so contact physics has time
-        # to settle before grasp_verify runs.
-        import os as _os
-        _gsteps = int(_os.environ.get("TASKBENCH_CUROBO_GRIPPER_STEPS", "6"))
-        actuate_gripper(env, self.planner, rc.gripper_closed,
-                        steps=_gsteps,
-                        step_callback=self.step_callback)
+        # number of hold-steps from the default 6. c11: TASKBENCH_CUROBO_TWO_STAGE_CLOSE
+        # does a two-stage close (half, hold, full) - each stage exerts less
+        # torque on the wrist than a single full close.
+        _gsteps = int(os.environ.get("TASKBENCH_CUROBO_GRIPPER_STEPS", "6"))
+        if os.environ.get("TASKBENCH_CUROBO_TWO_STAGE_CLOSE", "0") == "1":
+            actuate_gripper(env, self.planner, 0.0,
+                            steps=10,
+                            step_callback=self.step_callback)
+            actuate_gripper(env, self.planner, rc.gripper_closed,
+                            steps=_gsteps,
+                            step_callback=self.step_callback)
+        else:
+            actuate_gripper(env, self.planner, rc.gripper_closed,
+                            steps=_gsteps,
+                            step_callback=self.step_callback)
 
         # Verify grasp.
         if verify_grasp:
