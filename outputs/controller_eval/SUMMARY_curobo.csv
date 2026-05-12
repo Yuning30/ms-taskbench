@@ -1,0 +1,8 @@
+stage,description,success_n,success_rate,random_rate,canonical_rate,templated_rate,mean_wall_s,p95_wall_s,max_wall_s,fail_grasp_search,fail_reach,fail_grasp_approach,fail_grasp_verify,fail_lift
+v0_baseline,v0: baseline (mplib, robot_init_qpos_noise=0.02),271,0.5420,0.6086,0.5800,0.0000,2.62,14.67,46.57,0,38,175,15,1
+v6_multiapproach,v6: final mplib controller,298,0.5960,0.6000,0.5800,0.6000,3.57,18.24,52.66,21,25,125,24,7
+c2_curobo_motion,c2: route motion through cuRobo (keep yaw search),338,0.6760,0.6857,0.6200,0.7200,3.66,5.63,8.30,71,22,62,7,0
+c3_batched_grasp,c3: batched 36-pose goal-set grasp synthesis,328,0.6560,0.7086,0.6800,0.2400,2.75,4.41,5.09,73,9,83,7,0
+c4_plan_grasp,c4: full three-phase plan_grasp,367,0.7340,0.7457,0.7300,0.6600,2.33,3.67,5.27,84,0,0,49,0
+c5_relax_expand,c5: relax collision margin + 24 yaws (72 candidates),373,0.7460,0.7629,0.7300,0.6600,2.31,3.63,4.61,81,0,0,46,0
+c6_more_seeds,c6: double IK/trajopt seeds (no-op),373,0.7460,0.7657,0.7200,0.6600,2.33,3.63,4.65,81,0,0,46,0
