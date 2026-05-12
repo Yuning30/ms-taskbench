@@ -568,12 +568,19 @@ class Pick(Skill):
         if not grasp_ok or result.grasp_interpolated_trajectory is None:
             return PickResult(success=False, failure_reason="grasp_approach_failed",
                               grasp_pose=grasp_pose)
+        # c10: TASKBENCH_CUROBO_SETTLE_STEPS extends the grasp phase with N
+        # hold-the-last-pose steps. Idea: at the end of the trajectory the
+        # wrist may still have residual velocity; close-torque arriving on a
+        # moving wrist desymmetrizes the finger contact. Hold first, close
+        # after, so the wrist is stationary at close-time.
+        _settle = int(os.environ.get("TASKBENCH_CUROBO_SETTLE_STEPS", "0"))
         follow_curobo_joint_trajectory(
             env, result.grasp_interpolated_trajectory,
             gripper_state=rc.gripper_open,
             robot_config=rc,
             last_tstep=result.grasp_interpolated_last_tstep,
             step_callback=self.step_callback,
+            refine_steps=_settle,
         )
 
         # Close gripper. c8: env var TASKBENCH_CUROBO_GRIPPER_STEPS bumps the
