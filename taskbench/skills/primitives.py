@@ -274,6 +274,11 @@ class Pick(Skill):
 
             grasp_found = False
             grasp_pose = None
+
+            # Build all 36 candidates upfront. cuRobo can score them in a
+            # single batched plan_pose call (goalset of 36); mplib must
+            # evaluate them sequentially as before.
+            candidates: list[sapien.Pose] = []
             for approaching in approach_dirs:
                 grasp_info = compute_grasp_info_by_obb(
                     obb,
@@ -285,22 +290,30 @@ class Pick(Skill):
                 base_pose = raw.agent.build_grasp_pose(approaching, closing, center)
                 for angle in yaw_angles:
                     delta_pose = sapien.Pose(q=euler2quat(0, 0, angle))
-                    candidate = base_pose * delta_pose
-                    if self.curobo_planner is not None:
-                        from taskbench.skills.curobo_motion import move_to_pose_curobo
-                        res = move_to_pose_curobo(
-                            env, self.curobo_planner, candidate, rc.gripper_open, rc,
-                            dry_run=True,
-                        )
-                    else:
-                        res = move_to_pose(env, planner, candidate, rc.gripper_open, rc,
-                                           dry_run=True)
+                    candidates.append(base_pose * delta_pose)
+
+            if self.curobo_planner is not None:
+                cand_pq = [
+                    (np.asarray(c.p, dtype=np.float64).flatten()[:3],
+                     np.asarray(c.q, dtype=np.float64).flatten()[:4])
+                    for c in candidates
+                ]
+                arm_q = env.unwrapped.agent.robot.get_qpos().cpu().numpy().flatten()[:7]
+                batched = self.curobo_planner.plan_to_tcp_pose_set(cand_pq, arm_q)
+                if batched is not None:
+                    _, idx = batched
+                    if idx is None or idx < 0 or idx >= len(candidates):
+                        idx = 0
+                    grasp_pose = candidates[idx]
+                    grasp_found = True
+            else:
+                for candidate in candidates:
+                    res = move_to_pose(env, planner, candidate, rc.gripper_open, rc,
+                                       dry_run=True)
                     if res is None:
                         continue
                     grasp_pose = candidate
                     grasp_found = True
-                    break
-                if grasp_found:
                     break
 
             if not grasp_found:
