@@ -231,43 +231,55 @@ class Pick(Skill):
             env, planner, self.objects, exclude=obj_name,
         )
         try:
-            # Compute grasp pose from OBB.
-            # target_closing is fixed to the world y-axis so the grasp pose is
-            # a pure function of (actor.pose, actor.shape) — independent of the
-            # robot's current orientation. This is required for the data we
-            # feed into the verifier to be a deterministic function of the
-            # scene.
+            # Compute grasp pose from OBB. target_closing is fixed to the
+            # world y-axis so the synthesized grasp is a pure function of
+            # (actor.pose, actor.shape) — independent of the robot's
+            # current orientation. The approach direction varies across a
+            # small fan (straight-down + ±0.1 in x) so we can recover when
+            # straight-down is blocked but an angled approach is feasible.
             obb = get_actor_obb(obj)
             obj_size = np.asarray(obb.extents, dtype=np.float64)
-            approaching = np.array([0, 0, -1])
             target_closing = np.array([0.0, 1.0, 0.0])
-            grasp_info = compute_grasp_info_by_obb(
-                obb,
-                approaching=approaching,
-                target_closing=target_closing,
-                depth=rc.finger_length,
-            )
-            closing, center = grasp_info["closing"], grasp_info["center"]
-            grasp_pose = raw.agent.build_grasp_pose(approaching, closing, center)
 
-            # Search 12 rotation candidates evenly spaced around the full
-            # circle, ordered by distance from 0 so cheap "default" wrist
-            # yaws still try first.
+            def _normalized(v):
+                v = np.asarray(v, dtype=np.float64)
+                return v / np.linalg.norm(v)
+
+            approach_dirs = [
+                np.array([0.0, 0.0, -1.0]),
+                _normalized([-0.1, 0.0, -1.0]),  # tilted toward the robot
+                _normalized([0.1, 0.0, -1.0]),   # tilted away from the robot
+            ]
+
+            # 12 yaw rotations around the chosen approach axis, ordered so
+            # default wrist orientations still try first.
             _step = np.pi / 6  # 30 degrees
-            angles = np.array([k * _step for k in
-                               [0, 1, -1, 2, -2, 3, -3, 4, -4, 5, -5, 6]])
+            yaw_angles = np.array([k * _step for k in
+                                   [0, 1, -1, 2, -2, 3, -3, 4, -4, 5, -5, 6]])
 
             grasp_found = False
-            for angle in angles:
-                delta_pose = sapien.Pose(q=euler2quat(0, 0, angle))
-                candidate = grasp_pose * delta_pose
-                res = move_to_pose(env, planner, candidate, rc.gripper_open, rc,
-                                   dry_run=True)
-                if res is None:
-                    continue
-                grasp_pose = candidate
-                grasp_found = True
-                break
+            grasp_pose = None
+            for approaching in approach_dirs:
+                grasp_info = compute_grasp_info_by_obb(
+                    obb,
+                    approaching=approaching,
+                    target_closing=target_closing,
+                    depth=rc.finger_length,
+                )
+                closing, center = grasp_info["closing"], grasp_info["center"]
+                base_pose = raw.agent.build_grasp_pose(approaching, closing, center)
+                for angle in yaw_angles:
+                    delta_pose = sapien.Pose(q=euler2quat(0, 0, angle))
+                    candidate = base_pose * delta_pose
+                    res = move_to_pose(env, planner, candidate, rc.gripper_open, rc,
+                                       dry_run=True)
+                    if res is None:
+                        continue
+                    grasp_pose = candidate
+                    grasp_found = True
+                    break
+                if grasp_found:
+                    break
 
             if not grasp_found:
                 logger.warning("Failed to find a valid grasp pose")
