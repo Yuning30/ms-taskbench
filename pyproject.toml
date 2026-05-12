@@ -19,12 +19,16 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["black", "isort", "pytest>=8"]
+curobo = [
+    "nvidia-curobo",
+]
 
 [tool.setuptools.packages.find]
 include = ["taskbench*"]
 
 [tool.uv.sources]
 torch = { index = "pytorch-cu121" }
+nvidia-curobo = { path = "/common/home/st1122/Projects/third_party/curobo", editable = true }
 [tool.uv]
 prerelease = "allow"
 override-dependencies = [
