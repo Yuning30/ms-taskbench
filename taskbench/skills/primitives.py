@@ -428,9 +428,11 @@ class Pick(Skill):
             _normalized([-0.1, 0.0, -1.0]),
             _normalized([0.1, 0.0, -1.0]),
         ]
-        _step = np.pi / 6
+        # 24 yaws at 15-deg granularity (c5: up from 12 at 30 deg).
+        _step = np.pi / 12
         yaw_angles = np.array([k * _step for k in
-                               [0, 1, -1, 2, -2, 3, -3, 4, -4, 5, -5, 6]])
+                               [0, 1, -1, 2, -2, 3, -3, 4, -4, 5, -5, 6,
+                                7, -7, 8, -8, 9, -9, 10, -10, 11, -11, 12, -12]])
 
         candidates: list[sapien.Pose] = []
         for approaching in approach_dirs:
