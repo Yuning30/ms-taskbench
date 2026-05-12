@@ -158,3 +158,50 @@ candidate-level geometric features. It is fixable upstream (in the
 planner) by removing one keyword default. Net gain vs mplib v6:
 +104 successes (+20.8pp), 56% faster mean wall-clock.
 
+## c10 - settle-before-close (null result)
+
+After c9 reduced slips to 32, breakdown showed slip rate scales with
+robot-frame target x:
+- x < 0.60m (near half): 0.0% slip across 204 scenes
+- x = 0.65-0.70m: 12.8% (5/39)
+- x = 0.70-0.75m: 16.0% (8/50)
+- x > 0.80m (reach limit): 21.1% (4/19)
+
+Hypothesis: at extended reach the wrist is near singular; trajectory
+ends with residual velocity that close-torque amplifies into wrist
+drift; fingers desymmetrize, target slips.
+
+c10 adds N hold-the-last-pose steps between trajectory end and close
+(TASKBENCH_CUROBO_SETTLE_STEPS env var).
+
+| variant | success | grasp_plan | grasp_verify | mean wall |
+|---|---:|---:|---:|---:|
+| c9_finger_coll (baseline) | 402/500 (80.4%) | 66 | 32 | 1.59 s |
+| c10_settle_s10 | 402/500 (80.4%) | 66 | 32 | 2.12 s |
+| c10_settle_s20 | 403/500 (80.6%) | 66 | 31 | 2.24 s |
+
+**Null result.** Settling does not help. Combined with c8 (gripper
+close-rate has no effect), this rules out two of the three temporal
+mechanisms - residual motion at trajectory end (c10) and impulsive
+contact (c8). What's left: the close-torque itself causes wrist drift
+during the close. The pd controller cant correct fast enough at extended
+reach because the Jacobian is near-singular. This is structural to the
+Panda's kinematic configuration at the workspace edge.
+
+Three follow-up directions, in priority of likely payoff:
+1. **Reject targets at robot-frame x > 0.75m as out-of-reliable-workspace.**
+   This trivially boosts the success rate on the reachable subset to
+   ~84%. Honest re-labeling: cuRobo finds plans, but the close phase
+   is unreliable at extended reach.
+2. **Bump wrist PD gains during the gripper close action.** Requires
+   ManiSkill controller config changes; would let the wrist fight back
+   against close-torque drift. Sim-side change, not controller-side.
+3. **Pre-bias grasp candidates toward higher-manipulability wrist
+   configs at extended reach** (penalize candidates whose IK would
+   place joint 7 near its limit). Requires running IK per candidate
+   and adding manipulability to the candidate cost. Most invasive
+   but the most surgical fix.
+
+Production controller stays c9 (402/500 = 80.4%). Closing the loop on
+controller-side iteration.
+
