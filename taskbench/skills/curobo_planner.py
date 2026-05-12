@@ -85,8 +85,8 @@ class CuroboPlanner:
         *,
         max_cuboids: int = 16,
         max_goalset: int = 72,
-        num_trajopt_seeds: int = 4,
-        num_ik_seeds: int = 32,
+        num_trajopt_seeds: int = 8,
+        num_ik_seeds: int = 64,
         random_seed: int = 123,
         optimizer_collision_activation_distance: float = 0.005,
     ):
