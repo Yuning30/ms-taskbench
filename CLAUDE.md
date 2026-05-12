@@ -2,6 +2,19 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## SLURM Defaults
+
+- `working_dir`: `/common/home/st1122/Projects/ms-taskbench`
+- `log_dir`: `/common/home/st1122/Projects/ms-taskbench/slurm_logs/`
+- `env_activate`: `source /common/home/st1122/Projects/ms-taskbench/.venv/bin/activate`
+- `default_mem`: `16G`
+- `default_cpus`: `8`
+- `default_partition`: `unlimited`
+
+This is a uv project (no conda env). Activate via the venv directly.
+For cuRobo, also set `CUDA_HOME=/usr/local/cuda` and prepend
+`$CUDA_HOME/bin` to `PATH`.
+
 ## Environment Setup
 
 This project uses **uv** for dependency management. Always use `uv run` (not `source .venv/bin/activate && python`) and `uv pip` (not bare `pip`) for all operations.

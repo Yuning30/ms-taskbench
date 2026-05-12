@@ -17,3 +17,4 @@ replay_videos/
 # OS
 .DS_Store
 
+slurm_logs/

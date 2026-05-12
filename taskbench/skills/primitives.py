@@ -434,7 +434,22 @@ class Pick(Skill):
                                [0, 1, -1, 2, -2, 3, -3, 4, -4, 5, -5, 6,
                                 7, -7, 8, -8, 9, -9, 10, -10, 11, -11, 12, -12]])
 
+        # c7: each candidate carries a slip-risk cost. We later sort by it
+        # (lower = more stable grasp) and optionally truncate before handing
+        # to cuRobo, which still picks the lowest *trajectory*-cost among the
+        # surviving candidates. Net effect: bias the goalset toward
+        # face-on-face contact and top-down approaches.
+        #
+        # Two contributions:
+        #   tilt  : angle between approach and -z (top-down). 0 for [0,0,-1],
+        #           ~0.1 for the +-0.1x tilt fans. Penalty grows linearly.
+        #   yaw   : distance from a face-aligned yaw (yaw mod 90deg). 0 if the
+        #           gripper closing axis is parallel to a cube face;
+        #           pi/4 if it's diagonal across corners.
         candidates: list[sapien.Pose] = []
+        slip_costs: list[float] = []
+        TILT_W = 8.0
+        YAW_W = 1.0
         for approaching in approach_dirs:
             grasp_info = compute_grasp_info_by_obb(
                 obb, approaching=approaching, target_closing=target_closing,
@@ -442,9 +457,29 @@ class Pick(Skill):
             )
             closing, center = grasp_info["closing"], grasp_info["center"]
             base_pose = raw.agent.build_grasp_pose(approaching, closing, center)
+            tilt = float(1.0 - abs(float(approaching[2]) / np.linalg.norm(approaching)))
             for angle in yaw_angles:
                 delta_pose = sapien.Pose(q=euler2quat(0, 0, angle))
                 candidates.append(base_pose * delta_pose)
+                yaw_mod = float(angle) % (np.pi / 2)
+                yaw_off = min(yaw_mod, np.pi / 2 - yaw_mod) / (np.pi / 4)
+                slip_costs.append(TILT_W * tilt + YAW_W * yaw_off)
+
+        # Sort candidates by slip cost (ascending; lower = more stable).
+        # Two env-var knobs:
+        #   TASKBENCH_CUROBO_TOPK   - truncate to top-K. 0 disables truncation.
+        #   TASKBENCH_CUROBO_INVERT - "1" sorts in REVERSE (high-slip first).
+        #                             Sanity-check that the cost direction is
+        #                             right; if INVERT=1 + K=24 beats c5, our
+        #                             ranking direction is upside-down.
+        import os
+        top_k = int(os.environ.get("TASKBENCH_CUROBO_TOPK", "0"))
+        invert = os.environ.get("TASKBENCH_CUROBO_INVERT", "0") == "1"
+        order = sorted(range(len(candidates)), key=lambda i: slip_costs[i],
+                       reverse=invert)
+        if top_k > 0:
+            order = order[:top_k]
+        candidates = [candidates[i] for i in order]
 
         # Adaptive standoff (same as mplib path).
         target_p = obj.pose.p
