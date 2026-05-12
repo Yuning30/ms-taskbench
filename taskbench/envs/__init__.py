@@ -1,3 +1,29 @@
+import os
+
+# c12: optionally stiffen the Panda's wrist joints (5, 6, 7) at PD-controller
+# init. The c9 slip set is dominated by wrist drift during gripper close at
+# extended-reach configurations where the Jacobian is near-singular; stiffer
+# wrist PD lets the controller fight back faster.
+#   TASKBENCH_PANDA_WRIST_STIFFNESS_MULT - multiplier on default 1e3 stiffness
+#                                          for joints 5,6,7. Default 1.0.
+#   TASKBENCH_PANDA_WRIST_DAMPING_MULT   - multiplier on default 1e2 damping
+#                                          for joints 5,6,7. Default 1.0.
+_wrist_k = float(os.environ.get("TASKBENCH_PANDA_WRIST_STIFFNESS_MULT", "1.0"))
+_wrist_d = float(os.environ.get("TASKBENCH_PANDA_WRIST_DAMPING_MULT", "1.0"))
+if _wrist_k != 1.0 or _wrist_d != 1.0:
+    from mani_skill.agents.robots.panda.panda import Panda
+    from mani_skill.agents.robots.panda.panda_wristcam import PandaWristCam
+    # ManiSkill defaults: arm_stiffness=1e3 (scalar), arm_damping=1e2 (scalar).
+    # Replace with per-joint arrays so joints 5,6,7 use bumped gains.
+    _k_base = 1e3
+    _d_base = 1e2
+    _stiff = [_k_base] * 4 + [_k_base * _wrist_k] * 3
+    _damp = [_d_base] * 4 + [_d_base * _wrist_d] * 3
+    Panda.arm_stiffness = _stiff
+    Panda.arm_damping = _damp
+    PandaWristCam.arm_stiffness = _stiff
+    PandaWristCam.arm_damping = _damp
+
 import taskbench.envs.bin_with_objects  # noqa: F401 — triggers env registration
 import taskbench.envs.build2d  # noqa: F401 — triggers env registration
 import taskbench.envs.shelf_env  # noqa: F401 — triggers env registration
