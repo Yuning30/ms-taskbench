@@ -106,3 +106,55 @@ better slip predictor than any simple geometric heuristic. Code is
 kept env-var-gated (TASKBENCH_CUROBO_TOPK, _INVERT) for future
 experiments; default behavior is unchanged.
 
+## c8 / c9 — chasing the slip mechanism
+
+After c7 falsified the geometric-slip hypothesis, two follow-up
+experiments. c8 tested whether the slip came from gripper close
+dynamics (impulsive contact); c9 tested whether it came from finger-vs-neighbor
+interference at the grasp pose.
+
+| variant | success | grasp_plan | grasp_verify | mean wall |
+|---|---:|---:|---:|---:|
+| c5 baseline | 373/500 (74.6%) | 81 | 46 | 2.31 s |
+| c8_grip_g20 (close 6 -> 20 steps) | 371/500 (74.2%) | 81 | 48 | 1.95 s |
+| c8_grip_g40 (close 6 -> 40 steps) | 372/500 (74.4%) | 81 | 47 | 2.19 s |
+| **c9_finger_coll** | **402/500 (80.4%)** | **66** | **32** | **1.59 s** |
+
+c8 ruled out close dynamics: slowing the close from 6 to 40 steps
+(7x more time for physics to settle) had no effect on slip rate. 93%
+of c5's slip set persisted into c8.
+
+**c9 enables finger collisions in plan_grasp** (default cuRobo
+disables them for the entire grasp phase via grasp_contact_link_names).
+The target block remains excluded via sync_scene, so the gripper can
+still freely approach it; fingers just can't pass through neighbors.
+
+c9 is strictly dominant on every metric versus c5:
+
+| metric | c5 | c9 | delta |
+|---|---:|---:|---:|
+| total success | 373/500 (74.6%) | 402/500 (80.4%) | +29 (+5.8pp) |
+| random | 76.3% | 80.9% | +4.6pp |
+| canonical | 73.0% | 81.0% | +8.0pp |
+| templated | 66.0% | 76.0% | +10.0pp |
+| plan_fail | 81 | 66 | -15 |
+| verify_fail | 46 | 32 | -14 |
+| mean wall | 2.31 s | 1.59 s | -31% |
+| reach / approach / lift | 0 / 0 / 0 | 0 / 0 / 0 | unchanged |
+
+Slip set transitions c5 -> c9: 21 scenes rescued, 7 new slips, 25
+kept slipping in both. Plan-fail transitions: 15 rescued, **0** new
+plan-fails. This is unusual - enabling additional collision
+constraints would normally INCREASE plan_fail. The likely
+explanation: with fingers in the collision world, cuRobo's optimizer
+steers away from candidate regions where panda_hand is clear but
+fingers intrude. The smaller, cleaner search space converges faster
+(hence the speedup) and avoids the fake-feasible candidates whose
+post-check would fail.
+
+The hypothesis from c7's negative result is now confirmed: the slip
+cause is finger-vs-neighbor interference at the grasp pose, NOT
+candidate-level geometric features. It is fixable upstream (in the
+planner) by removing one keyword default. Net gain vs mplib v6:
++104 successes (+20.8pp), 56% faster mean wall-clock.
+
