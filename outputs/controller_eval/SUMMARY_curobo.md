@@ -205,3 +205,47 @@ Three follow-up directions, in priority of likely payoff:
 Production controller stays c9 (402/500 = 80.4%). Closing the loop on
 controller-side iteration.
 
+## c11 - two-stage gripper close (marginal)
+
+Layered on c9 (finger_coll=1). Splits the close into two phases:
+close to half (gripper_state=0.0) for 10 steps, then close to full
+for 6 steps. Hypothesis: less torque per stage = less wrist drift
+at the workspace edge.
+
+| variant | success | grasp_plan | grasp_verify | mean wall |
+|---|---:|---:|---:|---:|
+| c9_finger_coll (baseline) | 402/500 (80.4%) | 66 | 32 | 1.59 s |
+| c11_two_stage_close | 404/500 (80.8%) | 66 | 30 | 1.77 s |
+
+Slip set transitions: 29 of 32 c9 slips persist (the dominant
+mechanism is unchanged). 3 rescued, 1 new slip. Net +2 successes
+at +11% wall-clock.
+
+**c9 stays Pareto-best.** c11 is left in place as an env-var-gated
+alternative (TASKBENCH_CUROBO_TWO_STAGE_CLOSE=1) for applications that
+value the marginal +0.4pp over speed.
+
+## Truly closing the controller-side iteration
+
+Five experiments past c9 have all been near-null:
+
+| stage | hypothesis | result |
+|---|---|---|
+| c10 settle-before-close | wrist residual velocity at trajectory end | no effect |
+| c11 two-stage close | close torque drives wrist drift | +2 (marginal) |
+| (c8 close-rate, earlier) | impulsive contact at close | no effect |
+| (c7 slip cost, earlier) | candidate-level geometry | no effect (worse with filtering) |
+
+The remaining 30-32 slip failures are dominated by **wrist drift
+during the close action at extended-reach configurations**, where
+the Panda's Jacobian is near-singular. Controller-level
+interventions can rescue 1-3 marginal cases per attempt but cannot
+change the underlying mechanism.
+
+For further gains: sim-side wrist PD stiffening, or just rejecting
+target_x > 0.75m as out-of-reliable-workspace and accepting that
+limitation honestly.
+
+Final production controller: **c9 = 402/500 (80.4%), 1.59 s/sample,
++104 vs mplib v6.** c11 is an opt-in alternative for +2 at +11% cost.
+

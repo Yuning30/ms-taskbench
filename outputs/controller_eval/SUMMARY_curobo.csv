@@ -16,3 +16,4 @@ c8_grip_g40,c8: gripper close steps 6 -> 40 (more settle),372,0.7440,0.7600,0.73
 c9_finger_coll,c9: enable finger collisions in plan_grasp (BEST),402,0.8040,0.8086,0.8100,0.7600,1.59,2.13,5.50,66,0,0,32,0
 c10_settle_s10,c10: settle 10 steps before close (null result),402,0.8040,0.8086,0.8100,0.7600,2.12,3.85,7.42,66,0,0,32,0
 c10_settle_s20,c10: settle 20 steps before close (null result),403,0.8060,0.8086,0.8200,0.7600,2.24,2.96,7.86,66,0,0,31,0
+c11_two_stage_close,c11: two-stage gripper close (marginal +2),404,0.8080,0.8143,0.8100,0.7600,1.77,2.36,6.21,66,0,0,30,0
