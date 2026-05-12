@@ -27,6 +27,10 @@ import torch
 
 logger = logging.getLogger(__name__)
 
+# cuRobo's per-call "Running optimizer ..." log is noisy when we drive
+# thousands of plans through it. Silence by default; bump back up for debugging.
+logging.getLogger("curobo").setLevel(logging.WARNING)
+
 
 # ---------------------------------------------------------------------------
 # Geometry helpers (quaternion conventions: wxyz, ManiSkill / cuRobo standard)
@@ -192,6 +196,58 @@ class CuroboPlanner:
         if result is None or not bool(result.success.any()):
             return None
         return result
+
+    def plan_to_tcp_pose_set(
+        self,
+        candidate_tcp_poses: Sequence[Tuple[np.ndarray, np.ndarray]],
+        current_qpos_arm: np.ndarray,
+        *,
+        max_attempts: int = 1,
+    ):
+        """Plan from current qpos to *any one* of a goal-set of TCP world poses.
+
+        cuRobo internally batches all candidates, runs IK + trajopt in parallel,
+        and returns the trajectory to the lowest-cost reachable candidate.
+
+        Returns a 2-tuple ``(plan_result, selected_index)`` or None on failure.
+        """
+        from curobo.types import GoalToolPose, JointState
+
+        n = len(candidate_tcp_poses)
+        if n == 0:
+            return None
+        if n > self._max_goalset:
+            candidate_tcp_poses = list(candidate_tcp_poses)[: self._max_goalset]
+            n = len(candidate_tcp_poses)
+
+        hand_positions = np.zeros((n, 3), dtype=np.float32)
+        hand_quats = np.zeros((n, 4), dtype=np.float32)
+        for i, (p, q) in enumerate(candidate_tcp_poses):
+            hp, hq = tcp_world_to_hand_robot(
+                np.asarray(p), np.asarray(q), self._base_pos, self._base_quat,
+            )
+            hand_positions[i] = hp
+            hand_quats[i] = hq
+        pos_t = torch.tensor(hand_positions, device="cuda", dtype=torch.float32).view(1, 1, 1, n, 3)
+        quat_t = torch.tensor(hand_quats, device="cuda", dtype=torch.float32).view(1, 1, 1, n, 4)
+        goal = GoalToolPose(
+            tool_frames=self._planner.tool_frames,
+            position=pos_t,
+            quaternion=quat_t,
+        )
+        q_t = torch.tensor(current_qpos_arm, device="cuda", dtype=torch.float32).unsqueeze(0)
+        q_start = JointState.from_position(q_t, joint_names=self._planner.joint_names)
+        self.reset_seed()
+        result = self._planner.plan_pose(goal, q_start, max_attempts=max_attempts)
+        if result is None or not bool(result.success.any()):
+            return None
+        idx = None
+        if result.goalset_index is not None:
+            try:
+                idx = int(result.goalset_index.detach().cpu().numpy().flatten()[0])
+            except Exception:
+                idx = None
+        return result, idx
 
     def plan_grasp_set(
         self,

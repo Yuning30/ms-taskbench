@@ -126,12 +126,15 @@ class Skill(ABC):
 
     def __init__(self, env, planner, *, robot_config: Optional[RobotConfig] = None,
                  objects: Optional[dict[str, object]] = None,
-                 step_callback: Optional[Callable] = None):
+                 step_callback: Optional[Callable] = None,
+                 curobo_planner=None):
         self.env = env
         self.planner = planner
         self.robot_config = robot_config or get_robot_config(env)
         self.objects = objects or {}
         self.step_callback = step_callback
+        # When set, motion routes through cuRobo instead of mplib's plan_screw.
+        self.curobo_planner = curobo_planner
 
     @abstractmethod
     def __call__(self, *args, **kwargs) -> SkillResult:
@@ -192,9 +195,17 @@ class Move(Skill):
             target_pose = to_sapien_pose(target_pose_or_cube)
         rc = self.robot_config
         gripper_state = rc.gripper_open if gripper_open else rc.gripper_closed
-        res = move_to_pose(self.env, self.planner, target_pose, gripper_state,
-                           rc, monitor_contacts=monitor_contacts,
-                           step_callback=self.step_callback)
+        if self.curobo_planner is not None:
+            from taskbench.skills.curobo_motion import move_to_pose_curobo
+            res = move_to_pose_curobo(
+                self.env, self.curobo_planner, target_pose, gripper_state, rc,
+                monitor_contacts=monitor_contacts,
+                step_callback=self.step_callback,
+            )
+        else:
+            res = move_to_pose(self.env, self.planner, target_pose, gripper_state,
+                               rc, monitor_contacts=monitor_contacts,
+                               step_callback=self.step_callback)
         if res is None:
             return MoveResult(success=False, failure_reason="move_plan_failed")
         return MoveResult(success=True, step_result=res)
@@ -222,14 +233,18 @@ class Pick(Skill):
         obj = self.objects[obj_name]
         env, planner, rc = self.env, self.planner, self.robot_config
         raw = env.unwrapped
-        move = Move(env, planner, robot_config=rc, step_callback=self.step_callback)
+        move = Move(env, planner, robot_config=rc, step_callback=self.step_callback,
+                    curobo_planner=self.curobo_planner)
 
-        # Register every other free block as a planner collision obstacle so
-        # plan_screw rejects paths that would clip them BEFORE the contact
-        # monitor catches them mid-execution. Always cleaned up in finally.
-        block_obstacles_added = set_scene_block_obstacles(
-            env, planner, self.objects, exclude=obj_name,
-        )
+        # Obstacle registration: mplib uses a point-cloud of every other block;
+        # cuRobo holds an OBB cache that we resync each call.
+        block_obstacles_added = False
+        if self.curobo_planner is not None:
+            self.curobo_planner.sync_scene(self.objects, exclude=obj_name)
+        else:
+            block_obstacles_added = set_scene_block_obstacles(
+                env, planner, self.objects, exclude=obj_name,
+            )
         try:
             # Compute grasp pose from OBB. target_closing is fixed to the
             # world y-axis so the synthesized grasp is a pure function of
@@ -271,8 +286,15 @@ class Pick(Skill):
                 for angle in yaw_angles:
                     delta_pose = sapien.Pose(q=euler2quat(0, 0, angle))
                     candidate = base_pose * delta_pose
-                    res = move_to_pose(env, planner, candidate, rc.gripper_open, rc,
-                                       dry_run=True)
+                    if self.curobo_planner is not None:
+                        from taskbench.skills.curobo_motion import move_to_pose_curobo
+                        res = move_to_pose_curobo(
+                            env, self.curobo_planner, candidate, rc.gripper_open, rc,
+                            dry_run=True,
+                        )
+                    else:
+                        res = move_to_pose(env, planner, candidate, rc.gripper_open, rc,
+                                           dry_run=True)
                     if res is None:
                         continue
                     grasp_pose = candidate
@@ -370,8 +392,10 @@ class Pick(Skill):
                     grasp_pose=grasp_pose,
                 )
 
-            # Tell planner about the held object for collision-aware planning
-            attach_object(planner, obj_size)
+            # Tell planner about the held object for collision-aware planning.
+            # cuRobo manages attached objects through its own API (handled in c5).
+            if self.curobo_planner is None:
+                attach_object(planner, obj_size)
 
             return PickResult(
                 success=True,

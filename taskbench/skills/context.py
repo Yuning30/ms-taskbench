@@ -9,12 +9,17 @@ Eliminates the boilerplate that every solver repeats::
     ctx.place(target_pose)
 """
 
+import os
 from typing import Callable, Optional
 
 from taskbench.envs import get_objects
 from taskbench.skills.motion import setup_planner
 from taskbench.skills.primitives import Move, Pick, Place, Push
 from taskbench.skills.robot_config import RobotConfig, get_robot_config
+
+# When set to "curobo", SkillContext builds a CuroboPlanner and routes motion
+# through it. Any other value (or unset) uses mplib's plan_screw.
+MOTION_BACKEND_ENV_VAR = "TASKBENCH_MOTION_BACKEND"
 
 _NOT_READY_MSG = "SkillContext.reset() must be called before using skills"
 
@@ -47,6 +52,8 @@ class SkillContext:
         self.step_callback = step_callback
         self.robot_config: RobotConfig = get_robot_config(env)
         self.planner = None
+        self.curobo_planner = None
+        self._use_curobo = os.environ.get(MOTION_BACKEND_ENV_VAR, "").lower() == "curobo"
         self.objects: dict[str, object] = {}
 
         # Skill instances — populated by reset() → _build_skills()
@@ -60,6 +67,11 @@ class SkillContext:
         """Reset the env and rebuild planner, objects, and skills."""
         self.env.reset(seed=seed)
         self.planner = setup_planner(self.env, self.robot_config)
+        # cuRobo planner is built lazily once (warmup is expensive) and reused
+        # across resets; the scene is re-synced inside Pick via sync_scene().
+        if self._use_curobo and self.curobo_planner is None:
+            from taskbench.skills.curobo_planner import CuroboPlanner
+            self.curobo_planner = CuroboPlanner(self.env)
         self.objects = get_objects(self.env)
         self._build_skills()
 
@@ -69,6 +81,7 @@ class SkillContext:
             robot_config=self.robot_config,
             objects=self.objects,
             step_callback=self.step_callback,
+            curobo_planner=self.curobo_planner,
         )
         self.pick = Pick(self.env, self.planner, **kw)
         self.place = Place(self.env, self.planner, **kw)
