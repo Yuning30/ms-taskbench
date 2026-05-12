@@ -70,6 +70,57 @@ def move_to_pose_curobo(
     )
 
 
+def follow_curobo_joint_trajectory(
+    env, joint_trajectory, gripper_state, robot_config: RobotConfig,
+    *, last_tstep=None,
+    monitor_contacts: bool = False, step_callback=None, refine_steps: int = 0,
+    n_arm: int = 7,
+):
+    """Step the env through a precomputed cuRobo JointState trajectory.
+
+    cuRobo's interpolated trajectories are stored in a fixed-size buffer
+    (default 5000 steps) and padded at the end. ``last_tstep`` tells us how
+    many waypoints are real; ignoring it makes execution 50-100x slower than
+    necessary.
+
+    Returns the last (obs, reward, terminated, truncated, info) tuple, or
+    None if monitor_contacts aborts the segment.
+    """
+    positions = joint_trajectory.position.detach().cpu().numpy()
+    if positions.ndim == 3:
+        positions = positions[0]
+    elif positions.ndim == 4:
+        positions = positions[0, 0]
+    n_step = positions.shape[0]
+    if last_tstep is not None:
+        try:
+            lts = int(last_tstep.detach().cpu().numpy().flatten()[0]) if hasattr(last_tstep, "detach") else int(last_tstep)
+            if 0 < lts < n_step:
+                n_step = lts
+        except Exception:
+            pass
+    last = None
+    for i in range(n_step + refine_steps):
+        idx = min(i, n_step - 1)
+        qpos_arm = positions[idx, :n_arm]
+        action = build_action(env, qpos_arm, gripper_state)
+        obs, reward, terminated, truncated, info = env.step(action)
+        last = (obs, reward, terminated, truncated, info)
+        if step_callback is not None:
+            step_callback()
+        if monitor_contacts:
+            from taskbench.skills.motion import _get_gripper_contacts
+            for contact, finger, other in _get_gripper_contacts(env, robot_config):
+                force = sum(np.linalg.norm(pt.impulse) for pt in contact.points) / env.unwrapped.control_timestep
+                if force > 0.01:
+                    logger.warning(
+                        "Collision at step %d/%d: %s -> %s (%.2f N), aborting",
+                        i, n_step, finger, other, force,
+                    )
+                    return None
+    return last
+
+
 def _follow_curobo_plan(
     env, plan_result, gripper_state, robot_config: RobotConfig,
     *, monitor_contacts: bool, step_callback, refine_steps: int, n_arm: int,

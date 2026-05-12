@@ -262,9 +262,16 @@ class CuroboPlanner:
         Args:
             candidate_tcp_poses: list of (pos_world, quat_world_wxyz) tuples.
             current_qpos_arm: 7-vector arm joint positions.
-            grasp_approach_offset: distance to back off along tool z for the
-                pre-grasp pose, meters (positive).
-            grasp_lift_offset: distance to lift along tool z after grasp.
+            grasp_approach_offset: positive distance (m) to back off the
+                pre-grasp pose along the gripper's local -z. When the gripper
+                points down at the table, this is the height above the grasp.
+            grasp_lift_offset: positive distance (m) to lift along the
+                gripper's local -z (away from the object).
+
+        Note: cuRobo's plan_grasp takes a *signed* offset along the tool
+        axis (default -0.15). We expose positive values to keep the API
+        intuitive (matches our standoff semantics elsewhere) and negate
+        internally.
 
         Returns:
             GraspPlanResult or None if planning fails.
@@ -298,13 +305,20 @@ class CuroboPlanner:
         result = self._planner.plan_grasp(
             goal,
             q_start,
-            grasp_approach_offset=float(grasp_approach_offset),
-            grasp_lift_offset=float(grasp_lift_offset),
+            grasp_approach_offset=-float(grasp_approach_offset),
+            grasp_lift_offset=-float(grasp_lift_offset),
             plan_approach_to_grasp=True,
             plan_grasp_to_lift=True,
             grasp_lift_in_tool_frame=True,
         )
         if result is None or result.success is None or not bool(result.success.any()):
+            logger.debug(
+                "plan_grasp returned no success: status=%s approach=%s grasp=%s lift=%s",
+                getattr(result, "status", None),
+                None if result is None else (result.approach_success.flatten().tolist() if result.approach_success is not None else None),
+                None if result is None else (result.grasp_success.flatten().tolist() if result.grasp_success is not None else None),
+                None if result is None else (result.lift_success.flatten().tolist() if result.lift_success is not None else None),
+            )
             return None
         return result
 
