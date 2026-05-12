@@ -336,8 +336,20 @@ class Pick(Skill):
                     return PickResult(success=False,
                                       failure_reason="grasp_verification_failed")
 
-            # Lift (contacts off — gripper is holding the object)
-            lift_pose = sapien.Pose([0, 0, lift_height]) * grasp_pose
+            # Two-stage lift:
+            #   A) shift -1cm in world -x (toward the robot) at grasp z, to
+            #      clear any block sitting directly above the target.
+            #   B) lift vertically to grasp + lift_height.
+            # If Phase A fails to plan, fall back to a single-shot vertical
+            # lift (the v4 behavior).
+            world_nudge = sapien.Pose([-0.01, 0.0, 0.0])
+            nudged_pose = world_nudge * grasp_pose
+            nudged_res = move(nudged_pose, gripper_open=False, monitor_contacts=False)
+            if nudged_res.success:
+                lift_pose = world_nudge * sapien.Pose([0, 0, lift_height]) * grasp_pose
+            else:
+                # Fall back to one-shot vertical lift.
+                lift_pose = sapien.Pose([0, 0, lift_height]) * grasp_pose
             result = move(lift_pose, gripper_open=False, monitor_contacts=False)
             if not result.success:
                 return PickResult(
