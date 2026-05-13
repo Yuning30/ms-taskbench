@@ -413,6 +413,29 @@ class Pick(Skill):
         env, rc = self.env, self.robot_config
         raw = env.unwrapped
 
+        # c18: workspace-rejection feasibility gate. The c9 data shows all
+        # scenes with target_robot_x > 0.85m are 100% plan_fails (the Panda's
+        # reach limit). Pre-rejecting saves the ~2s cuRobo planning cost per
+        # rejected scene without losing any actual successes. Threshold is
+        # env-var configurable; default 0.85m matches the "free win" finding.
+        _ws_x_max = float(os.environ.get("TASKBENCH_WORKSPACE_X_MAX", "0.85"))
+        if _ws_x_max < float("inf"):
+            p = obj.pose.p
+            try:
+                p = p.cpu().numpy()
+            except Exception:
+                p = np.asarray(p)
+            p = np.asarray(p, dtype=np.float64).flatten()[:3]
+            base_p = self.curobo_planner._base_pos
+            tx_robot = float(p[0] - base_p[0])
+            if tx_robot > _ws_x_max:
+                logger.info(
+                    "workspace gate: target x=%.3fm (robot frame) > %.3fm; rejecting",
+                    tx_robot, _ws_x_max,
+                )
+                return PickResult(success=False,
+                                  failure_reason="out_of_workspace")
+
         self.curobo_planner.sync_scene(self.objects, exclude=obj_name)
 
         # Build the same 36 candidate grasp poses our other paths use.
@@ -473,7 +496,6 @@ class Pick(Skill):
         #                             Sanity-check that the cost direction is
         #                             right; if INVERT=1 + K=24 beats c5, our
         #                             ranking direction is upside-down.
-        import os
         top_k = int(os.environ.get("TASKBENCH_CUROBO_TOPK", "0"))
         invert = os.environ.get("TASKBENCH_CUROBO_INVERT", "0") == "1"
         order = sorted(range(len(candidates)), key=lambda i: slip_costs[i],

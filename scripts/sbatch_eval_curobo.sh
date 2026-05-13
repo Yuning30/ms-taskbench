@@ -23,6 +23,7 @@ if [ -n "${CUBE_MU:-}" ]; then export TASKBENCH_CUBE_FRICTION="${CUBE_MU}"; fi
 if [ -n "${GRIP_K:-}" ]; then export TASKBENCH_PANDA_GRIPPER_STIFFNESS_MULT="${GRIP_K}"; fi
 if [ -n "${GRIP_D:-}" ]; then export TASKBENCH_PANDA_GRIPPER_DAMPING_MULT="${GRIP_D}"; fi
 if [ -n "${CONTROL_MODE:-}" ]; then export TASKBENCH_CONTROL_MODE="${CONTROL_MODE}"; fi
+if [ -n "${WS_X_MAX:-}" ]; then export TASKBENCH_WORKSPACE_X_MAX="${WS_X_MAX}"; fi
 
 cd /common/home/st1122/Projects/ms-taskbench
 

@@ -28,6 +28,7 @@ _LEG_BY_REASON = {
     "grasp_approach_failed": "grasp_approach",
     "grasp_verification_failed": "grasp_verify",
     "lift_failed": "lift",
+    "out_of_workspace": "workspace_gate",
 }
 
 
