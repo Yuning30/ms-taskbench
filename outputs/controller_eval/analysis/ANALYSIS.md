@@ -1,24 +1,57 @@
 # c9 + c18 Controller — Failure-Mode Characterization
 
-**Controller**: cuRobo `plan_grasp` with finger collisions kept on (c9) plus a
-pre-planning workspace gate at robot-frame `x = 0.85 m` (c18). Single code
-path in `taskbench/skills/primitives.py:Pick._call_curobo`.
+## TL;DR
+
+**Controller**: cuRobo `plan_grasp` with panda-finger collisions enabled (c9)
+plus a pre-planning workspace gate at `x = 0.85 m` (c18). Both flags layer
+on a single code path in `Pick._call_curobo`.
+
+**Result on 1000 scenes** (500 in-sample seed `12345` + 500 OOS seed `98765`):
+
+- **79.5 %** success overall (in-sample 80.4 %, OOS 78.6 %; the gap is
+  within 95 % CI sampling noise).
+- Three failure modes, each ~6–7 %:
+  - `out_of_workspace` (6.4 %) — c18 pre-gate rejects targets beyond reach.
+  - `grasp_plan_failed` (7.3 %) — cuRobo finds no IK + collision-free plan.
+  - `grasp_verification_failed` (6.8 %) — plan succeeds, executes, but the
+    gripper close doesn't end with a stable grasp ("slip").
+- **Zero `reach` / `grasp_approach` / `lift` execution failures**. When
+  cuRobo returns a trajectory, the trajectory always executes cleanly.
+
+**Two scene features explain almost all the variation**: target reach
+(distance from robot base in x) and crowding (nearest neighbor block).
+Failure modes are non-overlapping in reach: slip dominates 0.60–0.80 m,
+plan-fail spikes 0.80–0.85 m, OOW handles > 0.85 m.
+
+**Three actionable recommendations** (full text in §6):
+
+1. **Tighten the c18 gate to 0.84 m**. The band `[0.84, 0.85)` contains
+   19 scenes all of which are plan-fails — zero successes lost, 19
+   plan_fail → out_of_workspace, ~38 s saved per 1000 scenes.
+2. **Accept the slip ceiling on this hardware**. 8 controller knobs were
+   tried past c9 with null results; the slip mechanism is mechanical
+   (wrist near singularity at extended reach).
+3. **The verifier's job is now a clean 2-feature classification**
+   (reach + crowding). Figure 10 is essentially what it needs to learn.
+
+**Skim path**: §1 (headline numbers) → §2 (the two structural axes) →
+§4.1 (the 2D heatmap) → §6 (recommendations). For the slip mechanism
+specifically, also §3.3 + the videos in `videos/`.
+
+---
 
 **Data**: 1000 scenes total, combining
 
 - `c18_workspace_gate.parquet` — in-sample, seed-set seed `12345` (500 scenes)
 - `c19_oos_seed98765.parquet` — out-of-sample, seed-set seed `98765` (500 scenes)
 
-The two evals agree to within sampling noise (80.4 % in-sample vs 78.6 % OOS,
-≤ 3.5 pp 95 % CI on 500 binomials). Failure-mode shape is also stable across
-the two — every bucket appears with the same relative weight in both. The
-analysis below treats them as a single 1000-scene reference set.
-
 **Source-of-truth artifacts**
 
-- Figures: `outputs/controller_eval/analysis/figures/*.png`
+- Figures: `outputs/controller_eval/analysis/figures/*.png` (11 PNGs)
+- Videos: `outputs/controller_eval/analysis/videos/` (5 MP4s, 6 PNG snapshots)
 - Per-scene records (one row per scene): `scene_records.csv` in this directory
-- Reproduce: `uv run python scripts/analyze_failure_modes.py`
+- Reproduce stats: `uv run python scripts/analyze_failure_modes.py`
+- Reproduce videos (needs CUDA): `python scripts/render_failure_videos.py`
 
 ---
 
