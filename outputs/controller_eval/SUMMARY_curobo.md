@@ -389,3 +389,38 @@ Further progress requires either:
 4. **Hardware**: wider finger pads or 3-finger gripper would
    structurally fix the asymmetric-contact mode.
 
+## c17 - velocity feedforward (pd_joint_pos_vel)
+
+cuRobo's interpolated trajectory carries velocities we were discarding.
+ManiSkill has a pd_joint_pos_vel control mode that takes both targets.
+Hypothesis: feedforward improves tracking at extended reach.
+
+| variant | success | slip | mean wall |
+|---|---:|---:|---:|
+| c9_finger_coll (baseline) | 402/500 (80.4%) | 32 | 1.59 s |
+| c17_pos_vel | 404/500 (80.8%) | 30 | 5.39 s |
+
++2 marginal at 3.4x wall-clock cost. Same pattern as c11, c12_k5, c16:
+2-3 borderline scenes rescued, 1-2 new ones introduced.
+
+## The noise floor
+
+11 experiments past c9. Every successful intervention lands in [403, 404]:
+
+| stage | success | delta vs c9 |
+|---|---:|---:|
+| c9 baseline | 402 | - |
+| c11 two-stage | 404 | +2 |
+| c12_wrist_k5 | 403 | +1 |
+| c16 combo | 403 | +1 |
+| c17 pos_vel | 404 | +2 |
+
+**The c9 baseline is genuinely 402 +/- 2 due to physics-simulation noise.**
+Perturbing the trajectory targets in any direction shuffles ~3 borderline
+scenes around. The 29-30 hard-core persistent slips are invariant under
+every controller/sim intervention we've tried.
+
+This concludes 17 controller stages (c0-c17) on the locked 500-scene seed
+set. **c9 stays Pareto-best**: 402/500 (80.4%), 1.59 s/sample mean,
++104 / +20.8pp / 56% faster than mplib v6.
+
