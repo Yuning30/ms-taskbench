@@ -503,3 +503,20 @@ cases is in outputs/controller_eval/analysis/ANALYSIS.md. Key findings:
    (target reach, min neighbor distance) - the 2D heatmap in the
    analysis directory is essentially what the verifier needs to learn.
 
+## c20 - workspace gate tightened to 0.84m (verified free win)
+
+The analysis identified that x in [0.84, 0.85m) is a 100% plan-fail
+band on the combined 1000-scene dataset. c20 verifies end-to-end:
+
+| controller | success | plan_fail | slip | OOW | gate |
+|---|---:|---:|---:|---:|---:|
+| c18 | 402/500 (80.4%) | 34 | 32 | 32 | 0.85 m |
+| **c20** | **402/500 (80.4%)** | **25** | **32** | **41** | **0.84 m** |
+
+Same success count. 9 plan_fails converted to OOW (saves ~18s of cuRobo
+planning per 500 scenes). The new default for TASKBENCH_WORKSPACE_X_MAX
+is 0.84 m.
+
+The production controller is now: c9 + c18 (gate=0.84). Numerically
+identical to c9 + c18 (gate=0.85) on success but slightly faster.
+
