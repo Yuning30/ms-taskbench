@@ -87,6 +87,11 @@ def follow_curobo_joint_trajectory(
     None if monitor_contacts aborts the segment.
     """
     positions = joint_trajectory.position.detach().cpu().numpy()
+    velocities = None
+    if joint_trajectory.velocity is not None and env.unwrapped.control_mode == "pd_joint_pos_vel":
+        velocities = joint_trajectory.velocity.detach().cpu().numpy()
+        if velocities.ndim == 3: velocities = velocities[0]
+        elif velocities.ndim == 4: velocities = velocities[0, 0]
     if positions.ndim == 3:
         positions = positions[0]
     elif positions.ndim == 4:
@@ -103,7 +108,12 @@ def follow_curobo_joint_trajectory(
     for i in range(n_step + refine_steps):
         idx = min(i, n_step - 1)
         qpos_arm = positions[idx, :n_arm]
-        action = build_action(env, qpos_arm, gripper_state)
+        # When holding the last pose (refine_steps), velocity is zero.
+        if velocities is not None:
+            qvel_arm = velocities[idx, :n_arm] if i < n_step else velocities[n_step - 1, :n_arm] * 0
+            action = build_action(env, qpos_arm, gripper_state, qvel=qvel_arm)
+        else:
+            action = build_action(env, qpos_arm, gripper_state)
         obs, reward, terminated, truncated, info = env.step(action)
         last = (obs, reward, terminated, truncated, info)
         if step_callback is not None:

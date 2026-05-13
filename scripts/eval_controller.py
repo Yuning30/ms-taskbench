@@ -168,15 +168,18 @@ def main():
         specs = specs[: args.limit]
         logger.info("--limit set: evaluating first %d scenes only", len(specs))
 
+    import os as _os
+    control_mode = _os.environ.get("TASKBENCH_CONTROL_MODE", "pd_joint_pos")
     env = gym.make(
         "Build2D-v1",
         num_envs=1,
         sim_backend="cpu",
         render_backend="cpu",
-        control_mode="pd_joint_pos",
+        control_mode=control_mode,
         grid_rows=args.grid_rows,
         grid_cols=args.grid_cols,
     )
+    logger.info("Control mode: %s", control_mode)
     ctx = SkillContext(env)
 
     t_start = time.perf_counter()
