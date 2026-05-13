@@ -414,11 +414,12 @@ class Pick(Skill):
         raw = env.unwrapped
 
         # c18: workspace-rejection feasibility gate. The c9 data shows all
-        # scenes with target_robot_x > 0.85m are 100% plan_fails (the Panda's
-        # reach limit). Pre-rejecting saves the ~2s cuRobo planning cost per
-        # rejected scene without losing any actual successes. Threshold is
-        # env-var configurable; default 0.85m matches the "free win" finding.
-        _ws_x_max = float(os.environ.get("TASKBENCH_WORKSPACE_X_MAX", "0.85"))
+        # scenes with target_robot_x > 0.84m are 100% plan_fails (the Panda's
+        # effective reach limit for a 4cm cube). Pre-rejecting saves the
+        # ~2s cuRobo planning cost per rejected scene without losing any
+        # actual successes. The tighter 0.84m default was verified by c20:
+        # 402/500 unchanged vs c18 0.85m, 9 fewer plan_fails per 500 scenes.
+        _ws_x_max = float(os.environ.get("TASKBENCH_WORKSPACE_X_MAX", "0.84"))
         if _ws_x_max < float("inf"):
             p = obj.pose.p
             try:

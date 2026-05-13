@@ -35,7 +35,7 @@ def _run_once(spec, scene_id="det-curobo-test"):
     # set it (and the c9 / c18 flags) here so the test is self-contained.
     os.environ["TASKBENCH_MOTION_BACKEND"] = "curobo"
     os.environ["TASKBENCH_CUROBO_FINGER_COLL"] = "1"
-    os.environ.setdefault("TASKBENCH_WORKSPACE_X_MAX", "0.85")
+    os.environ.setdefault("TASKBENCH_WORKSPACE_X_MAX", "0.84")
 
     env = gym.make(
         "Build2D-v1",
