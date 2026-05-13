@@ -30,3 +30,4 @@ c15_grip_stiff,c15: gripper PD 3x (-2),400,0.8000,0.8086,0.7900,0.7600,1.53,2.10
 c15_grip_soft,c15: gripper PD 0.3x (-6, slow),396,0.7920,0.7971,0.7900,0.7600,5.51,8.44,11.09,66,0,0,38,0
 c16_combo,c16: c9 + c11 two-stage + c12 5x wrist (combo null),403,0.8060,0.8143,0.8000,0.7600,4.62,7.86,11.68,66,0,0,31,0
 c17_pos_vel,c17: pd_joint_pos_vel velocity feedforward (+2 marginal),404,0.8080,0.8143,0.8100,0.7600,5.39,8.81,12.12,66,0,0,30,0
+c18_workspace_gate,c18: workspace gate x>0.85m (free win, same success),402,0.8040,0.8086,0.8100,0.7600,4.74,7.21,8.59,34,0,0,32,0
