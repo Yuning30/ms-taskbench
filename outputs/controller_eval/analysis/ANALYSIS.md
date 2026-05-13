@@ -294,6 +294,39 @@ This 2D plot is functionally what a verifier would learn. Two
 hand-engineered features (`tx_robot`, `min_nbr_d`) capture almost all
 the outcome variance the controller exposes.
 
+### 4.2 Where did cuRobo win? (v6 vs c9+c18 side-by-side)
+
+![v6 vs c9+c18 heatmap](figures/11_v6_vs_c9c18_heatmap.png)
+
+Three panels: v6 baseline (mplib), c9+c18 (cuRobo), delta (right). The
+delta panel makes the "where did cuRobo help?" question concrete.
+
+The biggest wins are concentrated in the **mid-reach × crowded** cells:
+
+- `[0.55, 0.65) m × 6-10 cm crowding`: v6 was 50-67 %, c9+c18 is 97-100 %.
+  These are the canonical pyramid mid-builds where mplib's straight-line
+  plan_screw failed because a neighbor blocked the vertical approach.
+  cuRobo's curved trajectory bypasses the neighbor. **+30 to +50 pp**.
+- `[0.60, 0.70) m × ≤4.5 cm touching`: v6 was 22-37 %, c9+c18 is 58-72 %.
+  Tightest crowding cases — cuRobo handles them via finger-collision-aware
+  IK. **+30 to +35 pp**.
+- `[0.65, 0.75) m × isolated`: small (+5 to +10 pp). cuRobo's reach
+  benefit here is modest because isolated targets at moderate reach work
+  for both planners.
+
+Where cuRobo **doesn't help**:
+
+- `< 0.50 m × any crowding`: both controllers were already at 100 %.
+  Delta is ~0.
+- `> 0.80 m`: both controllers struggle. Reach is the binding constraint,
+  not planning. cuRobo's plan_fail at extreme reach is at least *honest*
+  (vs mplib's mid-trajectory collisions), but the success rate doesn't
+  recover.
+
+The picture confirms the mechanism story: cuRobo's gains come almost
+entirely from **curved-trajectory planning around close neighbors**, not
+from extending the workspace.
+
 ---
 
 ## 5. Edge cases
