@@ -25,9 +25,10 @@ plan-fail spikes 0.80–0.85 m, OOW handles > 0.85 m.
 
 **Three actionable recommendations** (full text in §6):
 
-1. **Tighten the c18 gate to 0.84 m**. The band `[0.84, 0.85)` contains
-   19 scenes all of which are plan-fails — zero successes lost, 19
-   plan_fail → out_of_workspace, ~38 s saved per 1000 scenes.
+1. ~~**Tighten the c18 gate to 0.84 m**~~ **DONE (commit `b843e75`)**.
+   Verified end-to-end by c20: gate=0.84 produces 402/500 (identical to
+   gate=0.85) with 9 plan_fails converted to OOW. New default in
+   `_call_curobo` is 0.84 m.
 2. **Accept the slip ceiling on this hardware**. 8 controller knobs were
    tried past c9 with null results; the slip mechanism is mechanical
    (wrist near singularity at extended reach).
