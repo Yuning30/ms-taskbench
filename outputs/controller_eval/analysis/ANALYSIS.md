@@ -329,6 +329,40 @@ from extending the workspace.
 
 ---
 
+## 4.3 Rendered video snippets
+
+The figures above are 2D schematic top-down renders — useful for showing
+*where* a failure happens but not *how*. The videos in `videos/`
+reproduce six representative scenes with the full SAPIEN renderer, so
+the actual gripper motion + close dynamics are visible. Render
+parameters: `render_backend=gpu`, `video_fps=30`, ~5-10 s each.
+
+| category | scene | what to look for |
+|---|---|---|
+| `reach_stress_slip_easy/c18_workspace_gate_00085.mp4` | random, x_robot=0.627 m, isolated | gripper closes near the start of the slip zone; cube nudges sideways as fingers contact asymmetrically |
+| `reach_stress_slip_hard/c18_workspace_gate_00453.mp4` | templated edge_target, x_robot=0.820 m, isolated | arm nearly fully extended; gripper close drives the cube off the finger pads — clearest slip example |
+| `crowded_slip/c19_oos_seed98765_00430.mp4` | x_robot=0.657 m, neighbor at 0.9 cm | fingers wedge against a neighbor during close, the target slides out of the now-misaligned jaws |
+| `plan_fail_canonical/c18_workspace_gate_00372` (snapshot only) | x_robot=0.849 m | no MP4: cuRobo returned None, the robot never moved. The snapshot shows the scene at the moment of refusal |
+| `success_far_clean/c19_oos_seed98765_00424.mp4` | x_robot=0.821 m, isolated, success in eval (slipped on re-render — see note below) | contrast case: same reach as the hard slip but the eval marked it success; under the renderer with `render_backend=gpu` the outcome flipped |
+| `success_crowded/c19_oos_seed98765_00435.mp4` | x_robot=0.670 m, neighbor at 0.6 cm, success | clean pick in a crowded scene — shows what the planner is doing right |
+
+**Determinism note**: the rerun of `success_far_clean` returned
+`grasp_verification_failed` even though the original eval recorded
+`success`. The determinism receipt holds *within a render backend*:
+`render_backend=cpu` (eval) and `render_backend=gpu` (this rendering)
+go through different rasterization paths that influence sim seeding
+slightly, and outcomes near the slip-vs-success boundary can flip. This
+is consistent with the `402 ± 2` noise-floor finding documented in
+SUMMARY_curobo.md. The other five videos all reproduce the in-eval
+outcome on first run.
+
+Pairing with the static figures: figure `08_slip_crowded_examples.png`
+and the `crowded_slip/*.mp4` complement each other — the figure shows
+the geometric setup at 6 representative crowded slips, the video shows
+what physically happens for one of them.
+
+---
+
 ## 5. Edge cases
 
 ### 5.1 Templated archetype breakdown
