@@ -465,3 +465,41 @@ alone, plus cleaner failure-mode attribution.
 Cumulative vs mplib v6: +104 successes, +20.8pp, 56% faster mean
 wall-clock, cleaner downstream pipeline.
 
+## c19 - out-of-sample evaluation (different seed-set)
+
+To check that the 80.4 % number is not a property of the specific 500
+scenes in the in-sample seed-set, c19 re-evaluates c9+c18 on a fresh
+500-scene set generated with seed=98765.
+
+| metric | in-sample (c18) | OOS (c19) | delta |
+|---|---:|---:|---:|
+| success | 402/500 (80.4%) | 393/500 (78.6%) | -9 (-1.8pp) |
+| plan-fail | 34 | 39 | +5 |
+| slip | 32 | 36 | +4 |
+| OOW | 32 | 32 | 0 |
+
+The 1.8pp delta is well within sampling noise on 500 binomials (the 95%
+CI is approximately +/-3.5pp). All failure-mode counts agree to within
++/-5 scenes. The controller generalizes: 80.4% is not overfit to the
+seed-12345 scenes.
+
+## Failure-mode analysis
+
+A detailed characterization of all three failure modes (out_of_workspace,
+plan_fail, grasp_verify) with renderings, geometric analysis, and edge
+cases is in outputs/controller_eval/analysis/ANALYSIS.md. Key findings:
+
+1. The three modes are mechanistically distinct, each dominating a
+   different reach band: slip at 0.60-0.80m, plan-fail at 0.80-0.85m,
+   OOW above.
+2. The c18 gate at 0.85m is too lenient - x in [0.84, 0.85) is 100%
+   plan_fail. Tightening to 0.84m would save ~38s per 1000 scenes
+   at zero success cost.
+3. Slip splits into two sub-mechanisms: reach-stress (47/68, isolated
+   targets at extended reach) and crowded-scene (20/68, tight neighbors).
+4. Across 1000 scenes, the safe zone of reach < 0.60m has 100% success
+   regardless of crowding (136/136).
+5. The verifier can predict outcomes from just two scene features
+   (target reach, min neighbor distance) - the 2D heatmap in the
+   analysis directory is essentially what the verifier needs to learn.
+

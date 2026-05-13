@@ -268,6 +268,32 @@ cubes whose faces just touch have center-to-center distance √(0.04² +
 0.04²) ≈ 4.1 cm (worst case for diagonal contact). Below this distance
 the cubes physically overlap.
 
+### 4.1 Joint distribution: success rate vs (reach, crowding)
+
+The cleanest single picture of where the controller works and where it
+doesn't:
+
+![Success heatmap](figures/10_success_heatmap.png)
+
+Read this as a "where can the controller pick?" map.
+
+- **Bottom-left quadrant (reach < 0.60 m, any crowding)**: 100 %
+  success across every bin. This is the controller's reliable region.
+  136 / 136 successes.
+- **Top-left quadrant (reach < 0.60 m, isolated)**: trivially 100 %.
+- **Mid-reach × tight crowding [0.60-0.70 m] × [≤4.5 cm]**: success
+  drops to 14–62 %. The crowded-scene slip mechanism dominates here.
+- **Mid-reach × isolated [0.60-0.85 m] × isolated**: 22–80 % success,
+  scaling inversely with reach. This is the reach-stress slip
+  mechanism.
+- **Far-reach × any crowding [0.80-0.85 m]**: 22–40 % success. Both
+  plan-fail and reach-stress slip contribute; the gate at 0.85 m takes
+  over above this band.
+
+This 2D plot is functionally what a verifier would learn. Two
+hand-engineered features (`tx_robot`, `min_nbr_d`) capture almost all
+the outcome variance the controller exposes.
+
 ---
 
 ## 5. Edge cases
