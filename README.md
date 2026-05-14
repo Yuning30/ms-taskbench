@@ -43,6 +43,50 @@ uv run python -m taskbench.run solver=stack_cubes env.num_cubes=5 run.num_episod
 uv run python -m taskbench.run solver=replay run.solver_kwargs.demo_path=data/success/episode_seed45.hdf5
 ```
 
+**Solver:** `program_synthesis` — searches over skill programs (pick / place / move / skip) with MCMC structure proposals and CEM for continuous parameters. Candidates are scored by KL divergence between rollout state occupancy and expert demos in `data/success/`.
+
+1. Collect expert demos (one HDF5 per eval seed):
+
+```bash
+uv run python -m taskbench.run solver=stack_cubes run.num_episodes=10 seed=42
+```
+
+This writes `data/success/episode_seed{seed}.hdf5` for seeds `43`–`52` (`config.seed + episode_index`).
+
+2. Run synthesis (defaults in `configs/solver/program_synthesis.yaml`):
+
+```bash
+uv run python -m taskbench.run solver=program_synthesis run.num_episodes=1 seed=42
+```
+
+With `seed=42` and one episode, evaluation uses env seed `43`, so `data/success/episode_seed43.hdf5` must exist.
+
+```bash
+# Multiple eval seeds (each needs a matching demo file)
+uv run python -m taskbench.run solver=program_synthesis \
+  run.num_episodes=1 seed=42 \
+  run.solver_kwargs.eval_seeds=[43,44,45] \
+  run.solver_kwargs.mcmc_iters=20 \
+  run.solver_kwargs.program_length=5
+
+# Custom demo directory or CEM budget
+uv run python -m taskbench.run solver=program_synthesis \
+  run.solver_kwargs.demo_dir=data/success \
+  run.solver_kwargs.cem_iters=20 run.solver_kwargs.cem_N=64
+```
+
+| `run.solver_kwargs` | Default | Description |
+|---------------------|---------|-------------|
+| `program_length` | 3 | Instruction slots in the program |
+| `mcmc_iters` | 10 | MCMC structure proposals |
+| `skip_steps` | 0 | Env steps per `skip` instruction |
+| `cem_iters` / `cem_N` / `cem_K` | 10 / 32 / 4 | CEM hyperparameters for float args |
+| `eval_seeds` | `[]` | Eval seeds; empty → episode seed from `run.py` |
+| `demo_dir` | `data/success` | Expert demo directory |
+| `kl_samples` | 10000 | Samples for KDE-based KL estimate |
+
+Candidate programs are logged to `outputs/program_synthesis_candidates_seed*_*.jsonl`.
+
 ## Usage
 
 All commands use `uv run` — no manual venv activation needed.
@@ -56,6 +100,9 @@ uv run python -m taskbench.run solver=stack_cubes run.num_episodes=10
 
 # Replay a recorded demo
 uv run python -m taskbench.run solver=replay run.solver_kwargs.demo_path=data/success/episode_seed45.hdf5
+
+# Program synthesis (requires expert demos in data/success/)
+uv run python -m taskbench.run solver=program_synthesis run.num_episodes=1 seed=42
 ```
 
 Demos are saved to `data/success/` and `data/failure/`. Videos go to `videos/`.
