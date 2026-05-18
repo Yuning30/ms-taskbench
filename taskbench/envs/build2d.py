@@ -16,6 +16,7 @@ from mani_skill.agents.robots import Fetch, Panda
 from mani_skill.envs.utils import randomization
 from mani_skill.sensors.camera import CameraConfig
 from mani_skill.utils import common
+from mani_skill.utils import sapien_utils
 from mani_skill.utils.building import actors
 from mani_skill.utils.registration import register_env
 from mani_skill.utils.scene_builder.table import TableSceneBuilder
@@ -71,12 +72,15 @@ class Build2DEnv(TaskEnv):
 
     @property
     def _default_sensor_configs(self):
-        pose = sapien.Pose(p=[0, 0, 0], q=[1, 0, 0, 0])
-        return [CameraConfig("base_camera", pose, 128, 128, np.pi / 2, 0.01, 100)]
+        # Use an explicit "look at" pose so we don't accidentally point the
+        # camera away (which results in a black image).
+        pose = sapien_utils.look_at(eye=[0.85, 0.0, 0.35], target=[0.15, 0.0, 0.05])
+        return [CameraConfig("base_camera", pose, 768, 768, 1, 0.01, 100)]
 
     @property
     def _default_human_render_camera_configs(self):
-        pose = sapien.Pose(p=[-0.45, 0, 0.42], q=[0.9238795, 0, 0.3826834, 0])
+        # Match the rgb_array viewpoint so interactive and saved renders agree.
+        pose = sapien_utils.look_at([0.85, 0.0, 0.35], [0.15, 0.0, 0.05])
         return CameraConfig("render_camera", pose, 768, 768, 1, 0.01, 100)
 
     def _load_scene(self, options: dict):
@@ -94,7 +98,8 @@ class Build2DEnv(TaskEnv):
         spacing = 0.07
         origin_x = 0.05
         origin_y = -((self.grid_cols - 1) * spacing) / 2.0
-        target_z = float(self.block_half_size[2].item())
+        # target_z = float(self.block_half_size[2].item())
+        target_z = 0.03
 
         # Visible target markers and linked-list nodes (right / down).
         node_matrix: list[list[GridNode]] = []
@@ -104,12 +109,15 @@ class Build2DEnv(TaskEnv):
                 x = origin_x + i * spacing
                 y = origin_y + j * spacing
                 name = f"target_{i}_{j}"
+                # Visual-only goal markers (no collision): show target layout without
+                # affecting grasping or block dynamics.
                 marker = actors.build_cube(
                     self.scene,
                     half_size=0.012,
-                    color=[0.2, 0.6, 1.0, 0.35],
+                    color=[0.02, 0.02, 0.02, 0.45],
                     name=name,
                     body_type="kinematic",
+                    add_collision=False,
                     initial_pose=sapien.Pose(p=[x, y, 0.012]),
                 )
                 self.target_markers.append(marker)
@@ -152,12 +160,14 @@ class Build2DEnv(TaskEnv):
             radius = torch.linalg.norm(torch.tensor([0.02, 0.02])) + 0.001
             xyz = torch.zeros((b, 3))
             xyz[:, 2] = 0.02
+            qs = torch.tensor(
+                [[1.0, 0.0, 0.0, 0.0]],
+                device=self.device,
+                dtype=torch.float32,
+            ).expand(b, 4)
             for block in self.blocks:
                 xy = sampler.sample(radius, 100, verbose=False)
                 xyz[:, :2] = xy
-                qs = randomization.random_quaternions(
-                    b, lock_x=True, lock_y=True, lock_z=False
-                )
                 block.set_pose(Pose.create_from_pq(p=xyz.clone(), q=qs))
 
     def get_objects(self) -> dict[str, object]:

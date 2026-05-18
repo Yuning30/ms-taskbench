@@ -13,7 +13,7 @@ dataclass result with ``success`` and ``failure_reason`` fields.
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Callable, Optional
+from typing import TYPE_CHECKING, Callable, Optional
 
 import numpy as np
 import sapien
@@ -28,11 +28,15 @@ from taskbench.skills.motion import (
     PoseLike,
     actuate_gripper,
     attach_object,
+    build_action,
     detach_object,
     move_to_pose,
     to_sapien_pose,
 )
 from taskbench.skills.robot_config import RobotConfig, get_robot_config
+
+if TYPE_CHECKING:
+    from taskbench.skills.naive_ee_control import NaiveEEParams
 
 logger = logging.getLogger("taskbench.skills.primitives")
 
@@ -147,6 +151,10 @@ class Move(Skill):
         target_pose: PoseLike to move the end effector to.
         gripper_open: Gripper state during motion (default True).
         monitor_contacts: Abort on collision during execution (default True).
+        naive: If True (default), P-gain servo to target TCP xyz (no mplib).
+            Set False for mplib ``move_to_pose``. With joint-space control modes,
+            falls back to mplib automatically.
+        naive_gain, naive_tol, naive_max_steps: Passed to the naive move loop.
     """
 
     def __call__(
@@ -156,6 +164,10 @@ class Move(Skill):
         *,
         gripper_open=True,
         monitor_contacts=True,
+        naive: bool = True,
+        naive_gain: float = 10.0,
+        naive_tol: float = 8e-3,
+        naive_max_steps: int = 200,
     ) -> MoveResult:
         # New interface: ctx.move(target_cube, [x_offset, y_offset, z_offset])
         # Old interface remains supported: ctx.move(target_pose)
@@ -189,6 +201,37 @@ class Move(Skill):
         else:
             target_pose = to_sapien_pose(target_pose_or_cube)
         rc = self.robot_config
+        raw = self.env.unwrapped
+        ee_naive_ok = raw.control_mode in ("pd_ee_delta_pos", "pd_ee_delta_pose")
+        if naive and not ee_naive_ok:
+            logger.warning(
+                "Move naive=True needs pd_ee_delta_pos/pd_ee_delta_pose; "
+                "using mplib path (control_mode=%s).",
+                raw.control_mode,
+            )
+        if naive and ee_naive_ok:
+            from taskbench.skills.naive_ee_control import run_naive_move_to_position_loop
+
+            tp = target_pose.p
+            try:
+                tp = tp.cpu().numpy()
+            except Exception:
+                tp = np.asarray(tp)
+            target_xyz = np.asarray(tp, dtype=np.float64).flatten()[:3]
+            ok, _n = run_naive_move_to_position_loop(
+                self.env,
+                target_xyz,
+                rc,
+                gain=naive_gain,
+                close_gripper=not gripper_open,
+                tol=naive_tol,
+                max_steps=naive_max_steps,
+                step_callback=self.step_callback,
+            )
+            if not ok:
+                return MoveResult(success=False, failure_reason="naive_move_timeout")
+            return MoveResult(success=True)
+
         gripper_state = rc.gripper_open if gripper_open else rc.gripper_closed
         res = move_to_pose(self.env, self.planner, target_pose, gripper_state,
                            rc, monitor_contacts=monitor_contacts,
@@ -213,14 +256,86 @@ class Pick(Skill):
             ``self.objects``).
         lift_height: Height above grasp pose to lift to (default 0.1m).
         verify_grasp: Check ``agent.is_grasping()`` after closing (default True).
+        naive: If True (default), use :mod:`taskbench.skills.naive_ee_control`
+            (P-gain EE deltas + discrete gripper) instead of OBB grasp +
+            ``move_to_pose``. Set False for the legacy path only. With
+            joint-space control modes, falls back to the legacy path automatically.
+        naive_params: Optional tuning bundle; see
+            ``taskbench.skills.naive_ee_control.NaiveEEParams``.
     """
 
-    def __call__(self, obj_name: str, *, lift_height=0.1,
-                 verify_grasp=True) -> PickResult:
+    def __call__(
+        self,
+        obj_name: str,
+        *,
+        lift_height=0.1,
+        verify_grasp=True,
+        naive: bool = True,
+        naive_params: Optional["NaiveEEParams"] = None,
+    ) -> PickResult:
         obj = self.objects[obj_name]
         env, planner, rc = self.env, self.planner, self.robot_config
         raw = env.unwrapped
         move = Move(env, planner, robot_config=rc, step_callback=self.step_callback)
+
+        ee_naive_ok = raw.control_mode in ("pd_ee_delta_pos", "pd_ee_delta_pose")
+        import pdb; pdb.set_trace()
+        if naive and not ee_naive_ok:
+            logger.warning(
+                "Pick naive=True needs pd_ee_delta_pos/pd_ee_delta_pose; "
+                "using legacy pick (control_mode=%s).",
+                raw.control_mode,
+            )
+        if naive and ee_naive_ok:
+            from taskbench.skills.naive_ee_control import (
+                NaiveEEParams as _NaiveEEParams,
+                block_world_xyz,
+                run_naive_pick_place_loop,
+            )
+
+            params = naive_params if naive_params is not None else _NaiveEEParams()
+            obb = get_actor_obb(obj)
+            obj_size = np.asarray(obb.extents, dtype=np.float64)
+            block0 = block_world_xyz(obj)
+            lift_target = block0.copy()
+            lift_target[2] += float(lift_height)
+            ok, _steps = run_naive_pick_place_loop(
+                env,
+                obj,
+                lift_target,
+                rc,
+                params=params,
+                release=False,
+                step_callback=self.step_callback,
+            )
+            if not ok:
+                return PickResult(success=False, failure_reason="naive_pick_timeout")
+            if verify_grasp:
+                g = raw.agent.is_grasping(obj)
+                held_ok = bool(np.asarray(g.cpu().numpy(), dtype=bool).flatten().item())
+                if not held_ok:
+                    return PickResult(
+                        success=False,
+                        failure_reason="grasp_verification_failed",
+                    )
+            attach_object(planner, obj_size)
+            tcp = raw.agent.tcp.pose
+            tp = tcp.p
+            tq = tcp.q
+            try:
+                tp = tp.cpu().numpy().flatten()[:3].tolist()
+                tq = tq.cpu().numpy().flatten()[:4].tolist()
+            except Exception:
+                tp = np.asarray(tp, dtype=np.float64).flatten()[:3].tolist()
+                tq = np.asarray(tq, dtype=np.float64).flatten()[:4].tolist()
+            grasp_pose = sapien.Pose(tp, tq)
+            lift_pose = sapien.Pose(lift_target.tolist(), tq)
+            return PickResult(
+                success=True,
+                grasp_pose=grasp_pose,
+                lift_pose=lift_pose,
+                obj_size=obj_size,
+            )
 
         # Compute grasp pose from OBB
         obb = get_actor_obb(obj)
@@ -259,12 +374,12 @@ class Pick(Skill):
 
         # Reach: approach from 0.05m behind grasp pose
         reach_pose = grasp_pose * sapien.Pose([0, 0, -0.05])
-        result = move(reach_pose)
+        result = move(reach_pose, naive=False)
         if not result.success:
             return PickResult(success=False, failure_reason="reach_failed")
 
         # Grasp: move to grasp pose
-        result = move(grasp_pose)
+        result = move(grasp_pose, naive=False)
         if not result.success:
             return PickResult(success=False, failure_reason="grasp_approach_failed")
 
@@ -282,7 +397,12 @@ class Pick(Skill):
 
         # Lift (contacts off — gripper is holding the object)
         lift_pose = sapien.Pose([0, 0, lift_height]) * grasp_pose
-        result = move(lift_pose, gripper_open=False, monitor_contacts=False)
+        result = move(
+            lift_pose,
+            gripper_open=False,
+            monitor_contacts=False,
+            naive=False,
+        )
         if not result.success:
             return PickResult(
                 success=False,
@@ -314,6 +434,13 @@ class Place(Skill):
         settling_steps: Steps to let physics settle after release (default 10).
         retract_height: Absolute Z height to retract to after release.
             If None, retracts 0.1m above the release pose.
+        naive: If True (default), naive EE pick-place loop to reach
+            ``target_pose``, release, settle, then retract. Set False for the
+            legacy path only. With joint-space control modes, falls back to the
+            legacy path automatically. The grasped object is inferred via
+            ``agent.is_grasping``.
+        naive_params: Optional tuning bundle; see
+            ``taskbench.skills.naive_ee_control.NaiveEEParams``.
     """
 
     def __call__(
@@ -323,6 +450,8 @@ class Place(Skill):
         *,
         settling_steps=10,
         retract_height=None,
+        naive: bool = True,
+        naive_params: Optional["NaiveEEParams"] = None,
     ) -> PlaceResult:
         # New interface: ctx.place(target_cube, [x_offset, y_offset, z_offset])
         # Old interface remains supported: ctx.place(target_pose)
@@ -355,8 +484,91 @@ class Place(Skill):
         env, planner, rc = self.env, self.planner, self.robot_config
         move = Move(env, planner, robot_config=rc, step_callback=self.step_callback)
 
+        raw = env.unwrapped
+        ee_naive_ok = raw.control_mode in ("pd_ee_delta_pos", "pd_ee_delta_pose")
+        if naive and not ee_naive_ok:
+            logger.warning(
+                "Place naive=True needs pd_ee_delta_pos/pd_ee_delta_pose; "
+                "using legacy place (control_mode=%s).",
+                raw.control_mode,
+            )
+        if naive and ee_naive_ok:
+            from taskbench.skills.naive_ee_control import (
+                NaiveEEParams as _NaiveEEParams,
+                run_naive_move_to_position_loop,
+                run_naive_pick_place_loop,
+            )
+
+            held = None
+            for ob in self.objects.values():
+                try:
+                    g = raw.agent.is_grasping(ob)
+                    if bool(np.asarray(g.cpu().numpy(), dtype=bool).flatten().item()):
+                        held = ob
+                        break
+                except Exception:
+                    continue
+            if held is None:
+                return PlaceResult(
+                    success=False,
+                    failure_reason="naive_place_no_grasped_object",
+                )
+            tp = target_pose.p
+            try:
+                tp = tp.cpu().numpy()
+            except Exception:
+                tp = np.asarray(tp)
+            place_pos = np.asarray(tp, dtype=np.float64).flatten()[:3]
+            params = naive_params if naive_params is not None else _NaiveEEParams()
+            ok, _steps = run_naive_pick_place_loop(
+                env,
+                held,
+                place_pos,
+                rc,
+                params=params,
+                release=True,
+                last_block=False,
+                step_callback=self.step_callback,
+            )
+            if not ok:
+                return PlaceResult(success=False, failure_reason="naive_place_timeout")
+            detach_object(planner)
+            zd = (
+                np.zeros(6, dtype=np.float64)
+                if raw.control_mode == "pd_ee_delta_pose"
+                else np.zeros(3, dtype=np.float64)
+            )
+            for _ in range(settling_steps):
+                env.step(build_action(env, zd, rc.gripper_open))
+                if self.step_callback is not None:
+                    self.step_callback()
+            if retract_height is None:
+                retract_height = float(place_pos[2]) + 0.1
+            rpos = np.array(
+                [float(place_pos[0]), float(place_pos[1]), float(retract_height)],
+                dtype=np.float64,
+            )
+            ok2, _ = run_naive_move_to_position_loop(
+                env,
+                rpos,
+                rc,
+                gain=10.0,
+                close_gripper=False,
+                tol=8e-3,
+                max_steps=200,
+                step_callback=self.step_callback,
+            )
+            if not ok2:
+                logger.warning("Naive place retract did not converge")
+            return PlaceResult(success=True)
+
         # Move to target pose (contacts off — gripper is holding an object)
-        result = move(target_pose, gripper_open=False, monitor_contacts=False)
+        result = move(
+            target_pose,
+            gripper_open=False,
+            monitor_contacts=False,
+            naive=False,
+        )
         if not result.success:
             return PlaceResult(success=False, failure_reason="place_move_failed")
 
@@ -378,7 +590,7 @@ class Place(Skill):
             [target_pose.p[0], target_pose.p[1], retract_height],
             target_pose.q,
         )
-        result = move(retract_pose)
+        result = move(retract_pose, naive=False)
         if not result.success:
             logger.warning("Retract failed, continuing anyway")
 
@@ -417,7 +629,7 @@ class Push(Skill):
                      dtype=np.float32),
             tcp_q,
         )
-        result = move(clearance_pose)
+        result = move(clearance_pose, naive=False)
         if not result.success:
             return PushResult(success=False, failure_reason="clearance_lift_failed")
 
@@ -426,12 +638,12 @@ class Push(Skill):
                         step_callback=self.step_callback)
 
         # Approach — closed gripper, contact monitoring on
-        result = move(approach_pose, gripper_open=False)
+        result = move(approach_pose, gripper_open=False, naive=False)
         if not result.success:
             return PushResult(success=False, failure_reason="approach_failed")
 
         # Sweep — closed gripper, contact monitoring off (contact is intentional)
-        result = move(push_pose, gripper_open=False, monitor_contacts=False)
+        result = move(push_pose, gripper_open=False, monitor_contacts=False, naive=False)
         if not result.success:
             return PushResult(success=False, failure_reason="push_failed")
 
@@ -440,7 +652,7 @@ class Push(Skill):
             [push_pose.p[0], push_pose.p[1], push_pose.p[2] + lift_height],
             push_pose.q,
         )
-        result = move(post_lift_pose, gripper_open=False)
+        result = move(post_lift_pose, gripper_open=False, naive=False)
         if not result.success:
             logger.warning("Push lift failed, continuing anyway")
 

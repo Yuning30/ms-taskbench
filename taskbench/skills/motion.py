@@ -296,7 +296,12 @@ def move_to_pose(env, planner, pose, gripper_state, robot_config: RobotConfig,
                  dry_run=False, monitor_contacts=False, step_callback=None):
     """Plan and execute a straight-line motion to target pose.
 
-    Uses ``plan_screw()`` (Cartesian straight-line interpolation).
+    For ``pd_ee_delta_pose`` / ``pd_ee_delta_pos``, skips mplib and servos TCP
+    translation toward ``pose.p`` via ``build_action`` (orientation in
+    ``pose`` is not tracked for deltas).
+
+    For joint-space modes, uses ``plan_screw()`` (Cartesian straight-line
+    interpolation in the planner).
 
     Returns None on planning failure, the plan dict if dry_run=True,
     or the last (obs, reward, terminated, truncated, info) tuple.

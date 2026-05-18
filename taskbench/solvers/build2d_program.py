@@ -55,6 +55,17 @@ class Build2DProgramSolver(BaseSolver):
             raise ValueError("Build2DProgramSolver requires cfg (DictConfig).")
 
         raw = env.unwrapped
+        cm = raw.control_mode
+        if cm not in (
+            "pd_joint_pos",
+            "pd_joint_pos_vel",
+            "pd_ee_delta_pose",
+            "pd_ee_delta_pos",
+        ):
+            raise ValueError(
+                f"Unsupported control_mode {cm!r} for build2d_program; "
+                "use pd_ee_delta_pos, pd_ee_delta_pose, or pd_joint_pos/vel."
+            )
         if not hasattr(raw, "get_grid_head"):
             raise ValueError("Environment must provide get_grid_head() for build2d_program.")
         if not hasattr(raw, "get_available_block_names"):

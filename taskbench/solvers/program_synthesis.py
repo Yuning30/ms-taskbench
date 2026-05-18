@@ -160,10 +160,12 @@ class ProgramSynthesisSolver(BaseSolver):
         cfg_yaml: str,
         program: Program,
         eval_seeds: list[int],
-        pool: mp.pool.Pool,
+        pool: mp.pool.Pool = None,
     ) -> list[dict[str, Any]]:
-        jobs = [(cfg_yaml, program, self.skip_steps, int(s)) for s in eval_seeds]
-        return pool.starmap(_evaluate_program_for_seed, jobs)
+        # jobs = [(cfg_yaml, program, self.skip_steps, int(s)) for s in eval_seeds]
+        # return pool.starmap(_evaluate_program_for_seed, jobs)\
+        return [_evaluate_program_for_seed(cfg_yaml, program, self.skip_steps, int(s)) for s in eval_seeds]
+
 
     def _build_initial_program(self, cfg: DictConfig | None) -> Program:
         """Construct a hardcoded pick->place program with zeroed floats.
@@ -180,7 +182,7 @@ class ProgramSynthesisSolver(BaseSolver):
                 "pick",
                 {
                     "obj_name": "cube_0",
-                    "lift_height": 0.0,
+                    "lift_height": 0.05,
                     "verify_grasp": True,
                 },
             ),
@@ -188,8 +190,8 @@ class ProgramSynthesisSolver(BaseSolver):
                 "place",
                 {
                     "target_cube": "cube_1",
-                    "offsets": [0.0, 0.0, 0.0],
-                    "retract_height": 0.0,
+                    "offsets": [0.0, 0.0, 0.05],
+                    "retract_height": 0.05,
                     "settling_steps": 10,
                 },
             ),
@@ -374,6 +376,7 @@ class ProgramSynthesisSolver(BaseSolver):
         return program, float(best_score)
 
     def solve(self, env, seed=None, cfg=None) -> SolverResult:
+        import pdb; pdb.set_trace()
         if cfg is None:
             raise ValueError("ProgramSynthesisSolver requires cfg (DictConfig) to run.")
 
@@ -410,151 +413,152 @@ class ProgramSynthesisSolver(BaseSolver):
         # Build initial program and run an MCMC optimization loop over programs.
         initial_program = self._build_initial_program(cfg)
 
+        self._evaluate_program_across_seeds(cfg_yaml=cfg_yaml, program=initial_program, eval_seeds=eval_seeds)
         # Use spawn for maximum compatibility with PyTorch + ManiSkill.
         # This avoids CUDA/fork re-initialization errors in subprocesses.
-        mp_ctx = mp.get_context("spawn")
-        with mp_ctx.Pool(processes=workers) as pool:
-            def _cost_fn(p: Program) -> float:
-                per_seed = self._evaluate_program_across_seeds(
-                    cfg_yaml=cfg_yaml,
-                    program=p,
-                    eval_seeds=eval_seeds,
-                    pool=pool,
-                )
-                _kl, score = self._score_from_rollouts(per_seed, expert_states_total)
-                return float(score)
+        # mp_ctx = mp.get_context("spawn")
+        # with mp_ctx.Pool(processes=workers) as pool:
+        #     def _cost_fn(p: Program) -> float:
+        #         per_seed = self._evaluate_program_across_seeds(
+        #             cfg_yaml=cfg_yaml,
+        #             program=p,
+        #             eval_seeds=eval_seeds,
+        #             pool=pool,
+        #         )
+        #         _kl, score = self._score_from_rollouts(per_seed, expert_states_total)
+        #         return float(score)
 
-            # --- MCMC with inner CEM optimization (like external mcmc.py) ----
-            current_program = deepcopy(initial_program)
-            # First, optimize continuous parameters on the hardcoded structure.
-            current_program, current_cost = self._optimize_program_float_params_via_cem(
-                current_program,
-                cost_fn=_cost_fn,
-            )
-            logger.info(
-                "Initial program: %s",
-                json.dumps([asdict(instr) for instr in current_program.instructions]),
-            )
-            candidate_log_rows.append(
-                {
-                    "phase": "initial",
-                    "iter": -1,
-                    "accepted": True,
-                    "current_cost": float(current_cost),
-                    "best_cost": float(current_cost),
-                    "program": [asdict(instr) for instr in current_program.instructions],
-                }
-            )
-            logger.info("Initial program cost: %.6f", float(current_cost))
+        #     # --- MCMC with inner CEM optimization (like external mcmc.py) ----
+        #     current_program = deepcopy(initial_program)
+        #     # First, optimize continuous parameters on the hardcoded structure.
+        #     current_program, current_cost = self._optimize_program_float_params_via_cem(
+        #         current_program,
+        #         cost_fn=_cost_fn,
+        #     )
+        #     logger.info(
+        #         "Initial program: %s",
+        #         json.dumps([asdict(instr) for instr in current_program.instructions]),
+        #     )
+        #     candidate_log_rows.append(
+        #         {
+        #             "phase": "initial",
+        #             "iter": -1,
+        #             "accepted": True,
+        #             "current_cost": float(current_cost),
+        #             "best_cost": float(current_cost),
+        #             "program": [asdict(instr) for instr in current_program.instructions],
+        #         }
+        #     )
+        #     logger.info("Initial program cost: %.6f", float(current_cost))
 
-            best_program = deepcopy(current_program)
-            best_cost = float(current_cost)
+        #     best_program = deepcopy(current_program)
+        #     best_cost = float(current_cost)
 
-            for it in range(self.mcmc_iters):
-                proposed_program, changed = self._mutate_program(current_program)
-                if not changed:
-                    candidate_log_rows.append(
-                        {
-                            "phase": "mcmc",
-                            "iter": it,
-                            "changed": False,
-                            "accepted": False,
-                            "current_cost": float(current_cost),
-                            "best_cost": float(best_cost),
-                            "program": [asdict(instr) for instr in current_program.instructions],
-                        }
-                    )
-                    logger.info(
-                        "[MCMC %d/%d] no-op mutation, current=%.6f best=%.6f",
-                        it + 1,
-                        self.mcmc_iters,
-                        float(current_cost),
-                        float(best_cost),
-                    )
-                    logger.info(
-                        "[MCMC %d/%d] current program: %s",
-                        it + 1,
-                        self.mcmc_iters,
-                        json.dumps([asdict(instr) for instr in current_program.instructions]),
-                    )
-                    continue
+        #     for it in range(self.mcmc_iters):
+        #         proposed_program, changed = self._mutate_program(current_program)
+        #         if not changed:
+        #             candidate_log_rows.append(
+        #                 {
+        #                     "phase": "mcmc",
+        #                     "iter": it,
+        #                     "changed": False,
+        #                     "accepted": False,
+        #                     "current_cost": float(current_cost),
+        #                     "best_cost": float(best_cost),
+        #                     "program": [asdict(instr) for instr in current_program.instructions],
+        #                 }
+        #             )
+        #             logger.info(
+        #                 "[MCMC %d/%d] no-op mutation, current=%.6f best=%.6f",
+        #                 it + 1,
+        #                 self.mcmc_iters,
+        #                 float(current_cost),
+        #                 float(best_cost),
+        #             )
+        #             logger.info(
+        #                 "[MCMC %d/%d] current program: %s",
+        #                 it + 1,
+        #                 self.mcmc_iters,
+        #                 json.dumps([asdict(instr) for instr in current_program.instructions]),
+        #             )
+        #             continue
 
-                # Optimize continuous float parameters for the proposed structure.
-                proposed_program, proposed_cost = self._optimize_program_float_params_via_cem(
-                    proposed_program,
-                    cost_fn=_cost_fn,
-                )
+        #         # Optimize continuous float parameters for the proposed structure.
+        #         proposed_program, proposed_cost = self._optimize_program_float_params_via_cem(
+        #             proposed_program,
+        #             cost_fn=_cost_fn,
+        #         )
 
-                # Metropolis acceptance ratio; higher is better.
-                acceptance_ratio = math.exp(proposed_cost - current_cost)
-                u = random.random()
-                accepted = u < acceptance_ratio
-                if accepted:
-                    current_program = proposed_program
-                    current_cost = proposed_cost
+        #         # Metropolis acceptance ratio; higher is better.
+        #         acceptance_ratio = math.exp(proposed_cost - current_cost)
+        #         u = random.random()
+        #         accepted = u < acceptance_ratio
+        #         if accepted:
+        #             current_program = proposed_program
+        #             current_cost = proposed_cost
 
-                if proposed_cost > best_cost:
-                    best_cost = proposed_cost
-                    best_program = deepcopy(proposed_program)
-                    logger.info(
-                        "[MCMC %d/%d] new best cost: %.6f",
-                        it + 1,
-                        self.mcmc_iters,
-                        float(best_cost),
-                    )
+        #         if proposed_cost > best_cost:
+        #             best_cost = proposed_cost
+        #             best_program = deepcopy(proposed_program)
+        #             logger.info(
+        #                 "[MCMC %d/%d] new best cost: %.6f",
+        #                 it + 1,
+        #                 self.mcmc_iters,
+        #                 float(best_cost),
+        #             )
 
-                candidate_log_rows.append(
-                    {
-                        "phase": "mcmc",
-                        "iter": it,
-                        "changed": True,
-                        "accepted": bool(accepted),
-                        "u": float(u),
-                        "acceptance_ratio": float(acceptance_ratio),
-                        "proposed_cost": float(proposed_cost),
-                        "current_cost_after": float(current_cost),
-                        "best_cost": float(best_cost),
-                        "program": [asdict(instr) for instr in proposed_program.instructions],
-                    }
-                )
-                logger.info(
-                    "[MCMC %d/%d] proposed=%.6f ratio=%.4f u=%.4f accepted=%s current=%.6f best=%.6f",
-                    it + 1,
-                    self.mcmc_iters,
-                    float(proposed_cost),
-                    float(acceptance_ratio),
-                    float(u),
-                    accepted,
-                    float(current_cost),
-                    float(best_cost),
-                )
-                logger.info(
-                    "[MCMC %d/%d] proposed program: %s",
-                    it + 1,
-                    self.mcmc_iters,
-                    json.dumps([asdict(instr) for instr in proposed_program.instructions]),
-                )
-                logger.info(
-                    "[MCMC %d/%d] current program after accept/reject: %s",
-                    it + 1,
-                    self.mcmc_iters,
-                    json.dumps([asdict(instr) for instr in current_program.instructions]),
-                )
+        #         candidate_log_rows.append(
+        #             {
+        #                 "phase": "mcmc",
+        #                 "iter": it,
+        #                 "changed": True,
+        #                 "accepted": bool(accepted),
+        #                 "u": float(u),
+        #                 "acceptance_ratio": float(acceptance_ratio),
+        #                 "proposed_cost": float(proposed_cost),
+        #                 "current_cost_after": float(current_cost),
+        #                 "best_cost": float(best_cost),
+        #                 "program": [asdict(instr) for instr in proposed_program.instructions],
+        #             }
+        #         )
+        #         logger.info(
+        #             "[MCMC %d/%d] proposed=%.6f ratio=%.4f u=%.4f accepted=%s current=%.6f best=%.6f",
+        #             it + 1,
+        #             self.mcmc_iters,
+        #             float(proposed_cost),
+        #             float(acceptance_ratio),
+        #             float(u),
+        #             accepted,
+        #             float(current_cost),
+        #             float(best_cost),
+        #         )
+        #         logger.info(
+        #             "[MCMC %d/%d] proposed program: %s",
+        #             it + 1,
+        #             self.mcmc_iters,
+        #             json.dumps([asdict(instr) for instr in proposed_program.instructions]),
+        #         )
+        #         logger.info(
+        #             "[MCMC %d/%d] current program after accept/reject: %s",
+        #             it + 1,
+        #             self.mcmc_iters,
+        #             json.dumps([asdict(instr) for instr in current_program.instructions]),
+        #         )
 
-            final_per_seed = self._evaluate_program_across_seeds(
-                cfg_yaml=cfg_yaml,
-                program=best_program,
-                eval_seeds=eval_seeds,
-                pool=pool,
-            )
-            final_kl, final_score = self._score_from_rollouts(
-                final_per_seed,
-                expert_states_total,
-            )
+        #     final_per_seed = self._evaluate_program_across_seeds(
+        #         cfg_yaml=cfg_yaml,
+        #         program=best_program,
+        #         eval_seeds=eval_seeds,
+        #         pool=pool,
+        #     )
+        #     final_kl, final_score = self._score_from_rollouts(
+        #         final_per_seed,
+        #         expert_states_total,
+        #     )
 
-        success_rate = float(
-            sum(1 for r in final_per_seed if r["success"]) / max(1, len(final_per_seed))
-        )
+        # success_rate = float(
+        #     sum(1 for r in final_per_seed if r["success"]) / max(1, len(final_per_seed))
+        # )
         mean_reward = float(sum(r["reward"] for r in final_per_seed) / max(1, len(final_per_seed)))
         mean_steps = float(sum(r["steps"] for r in final_per_seed) / max(1, len(final_per_seed)))
         for r in final_per_seed:
