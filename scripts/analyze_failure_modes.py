@@ -24,7 +24,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pyarrow.parquet as pq
 
-OUT_DIR = Path("/common/home/st1122/Projects/ms-taskbench/outputs/controller_eval/analysis")
+OUT_DIR = Path("/common/home/st1122/Projects/ms-taskbench/outputs/controller_eval/analysis_c21")
 FIG_DIR = OUT_DIR / "figures"
 FIG_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -38,12 +38,14 @@ OUTCOME_COLOR = {
     "out_of_workspace": "#7f7f7f",   # grey
     "grasp_plan_failed": "#ff7f0e",  # orange
     "grasp_verification_failed": "#d62728",  # red
+    "post_lift_slip": "#9467bd",     # purple
 }
 OUTCOME_LABEL = {
     "success": "success",
     "out_of_workspace": "out-of-workspace (c18)",
     "grasp_plan_failed": "plan-failed",
-    "grasp_verification_failed": "grasp-slip",
+    "grasp_verification_failed": "close-time slip",
+    "post_lift_slip": "post-lift slip",
 }
 
 
@@ -145,7 +147,8 @@ def plot_outcome_scatter(rows, save_path: Path):
     ax.plot([ROBOT_BASE_X], [0.0], "bs", markersize=10, label="robot base")
     # Targets
     for outcome in ["success", "grasp_plan_failed",
-                    "grasp_verification_failed", "out_of_workspace"]:
+                    "grasp_verification_failed", "post_lift_slip",
+                    "out_of_workspace"]:
         xs = [r["tx"] for r in rows if r["outcome"] == outcome]
         ys = [r["ty"] for r in rows if r["outcome"] == outcome]
         ax.scatter(xs, ys, c=OUTCOME_COLOR[outcome], s=14, alpha=0.6,
@@ -167,7 +170,7 @@ def plot_reach_histograms(rows, save_path: Path):
     fig, ax = plt.subplots(figsize=(8, 5))
     bins = np.arange(0.34, 0.92, 0.02)
     bottoms = np.zeros(len(bins) - 1)
-    for outcome in ["success", "grasp_verification_failed",
+    for outcome in ["success", "grasp_verification_failed", "post_lift_slip",
                     "grasp_plan_failed", "out_of_workspace"]:
         xs = [r["tx_robot"] for r in rows if r["outcome"] == outcome]
         hist, _ = np.histogram(xs, bins=bins)
@@ -225,8 +228,9 @@ def plot_reach_failure_rates(rows, save_path: Path):
 
 def plot_neighbor_histograms(rows, save_path: Path):
     """Histogram of nearest-neighbor distance, grouped by outcome."""
-    fig, axes = plt.subplots(2, 2, figsize=(11, 8), sharex=True, sharey=True)
+    fig, axes = plt.subplots(2, 3, figsize=(15, 8), sharex=True, sharey=True)
     for ax, outcome in zip(axes.flatten(), ["success", "grasp_verification_failed",
+                                            "post_lift_slip",
                                             "grasp_plan_failed", "out_of_workspace"]):
         ds = [r["min_nbr_d"] for r in rows
               if r["outcome"] == outcome and np.isfinite(r["min_nbr_d"])]
@@ -338,8 +342,8 @@ def render_failure_mode_grid(rows, outcome: str, scenes: list, save_path: Path,
 
 def main():
     paths = [
-        "/common/home/st1122/Projects/ms-taskbench/outputs/controller_eval/c18_workspace_gate.parquet",
-        "/common/home/st1122/Projects/ms-taskbench/outputs/controller_eval/c19_oos_seed98765.parquet",
+        "/common/home/st1122/Projects/ms-taskbench/outputs/controller_eval/c21_correct_eval.parquet",
+        "/common/home/st1122/Projects/ms-taskbench/outputs/controller_eval/c21_correct_eval_oos.parquet",
     ]
     rows = load_scenes(paths)
     print(f"loaded {len(rows)} scenes from {len(paths)} evals")
@@ -436,6 +440,32 @@ def main():
             f"\n{len(slip_crowd)} of {len(slips)} slips have this profile",
         )
         print("  08_slip_crowded_examples.png")
+
+    # Post-lift slip: contact at close, slips out during the lift trajectory.
+    # Visible only after c21's post-lift verification was added.
+    post_slip = [r for r in rows if r["outcome"] == "post_lift_slip"]
+    if post_slip:
+        post_reach = [r for r in post_slip if r["tx_robot"] > 0.60 and r["nbrs_5"] == 0]
+        post_crowd = [r for r in post_slip if r["nbrs_5"] >= 1]
+        if post_reach:
+            picks = sorted(post_reach, key=lambda r: r["tx_robot"])[-6:]
+            render_failure_mode_grid(
+                rows, "post_lift_slip", picks,
+                FIG_DIR / "08b_post_lift_slip_reach.png",
+                "Post-lift slip: cube held briefly then dropped during lift "
+                "(reach-stress)",
+                f"\n{len(post_reach)} of {len(post_slip)} post-lift slips have this profile",
+            )
+            print("  08b_post_lift_slip_reach.png")
+        if post_crowd:
+            picks = sorted(post_crowd, key=lambda r: r["min_nbr_d"])[:6]
+            render_failure_mode_grid(
+                rows, "post_lift_slip", picks,
+                FIG_DIR / "08c_post_lift_slip_crowded.png",
+                "Post-lift slip: cube dropped during lift in crowded scene",
+                f"\n{len(post_crowd)} of {len(post_slip)} post-lift slips have this profile",
+            )
+            print("  08c_post_lift_slip_crowded.png")
 
     # ----- Edge case: scenes near the workspace boundary -----
     boundary = [r for r in rows

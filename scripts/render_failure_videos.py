@@ -36,7 +36,7 @@ from mani_skill.utils.wrappers import RecordEpisode
 # the env var at import time (e.g. for wrist-PD patches).
 os.environ.setdefault("TASKBENCH_MOTION_BACKEND", "curobo")
 os.environ.setdefault("TASKBENCH_CUROBO_FINGER_COLL", "1")
-os.environ.setdefault("TASKBENCH_WORKSPACE_X_MAX", "0.85")
+os.environ.setdefault("TASKBENCH_WORKSPACE_X_MAX", "0.84")
 
 import taskbench.envs  # noqa: F401 — registers Build2D-v1
 import taskbench.envs.build2d as _build2d
@@ -63,10 +63,10 @@ _build2d.Build2DEnv._default_human_render_camera_configs = property(_angled_rend
 
 ROBOT_BASE_X = -0.615
 PARQUETS = [
-    "/common/home/st1122/Projects/ms-taskbench/outputs/controller_eval/c18_workspace_gate.parquet",
-    "/common/home/st1122/Projects/ms-taskbench/outputs/controller_eval/c19_oos_seed98765.parquet",
+    "/common/home/st1122/Projects/ms-taskbench/outputs/controller_eval/c21_correct_eval.parquet",
+    "/common/home/st1122/Projects/ms-taskbench/outputs/controller_eval/c21_correct_eval_oos.parquet",
 ]
-OUT_DIR = Path("/common/home/st1122/Projects/ms-taskbench/outputs/controller_eval/analysis/videos")
+OUT_DIR = Path("/common/home/st1122/Projects/ms-taskbench/outputs/controller_eval/analysis/videos_c21")
 
 
 def _load_all_rows():
@@ -114,18 +114,23 @@ def pick_scenes(rows):
         return matches[0]
 
     categories = {
-        "reach_stress_slip_easy": select(
+        "close_slip_reach": select(
             lambda r: (r["failure_reason"] == "grasp_verification_failed"
-                       and r["tx_robot"] < 0.72 and r["min_nbr_d"] > 0.10),
-            sort_key=lambda r: r["tx_robot"],
-        ),
-        "reach_stress_slip_hard": select(
-            lambda r: (r["failure_reason"] == "grasp_verification_failed"
-                       and r["tx_robot"] > 0.74 and r["min_nbr_d"] > 0.10),
+                       and r["tx_robot"] > 0.74),
             sort_key=lambda r: -r["tx_robot"],
         ),
-        "crowded_slip": select(
+        "close_slip_crowded": select(
             lambda r: (r["failure_reason"] == "grasp_verification_failed"
+                       and r["min_nbr_d"] < 0.06),
+            sort_key=lambda r: r["min_nbr_d"],
+        ),
+        "post_lift_slip_reach": select(
+            lambda r: (r["failure_reason"] == "post_lift_slip"
+                       and r["tx_robot"] > 0.70),
+            sort_key=lambda r: -r["tx_robot"],
+        ),
+        "post_lift_slip_crowded": select(
+            lambda r: (r["failure_reason"] == "post_lift_slip"
                        and r["min_nbr_d"] < 0.06),
             sort_key=lambda r: r["min_nbr_d"],
         ),
@@ -214,6 +219,28 @@ def render_one(category: str, row: dict):
     snapshot_path = cat_dir / f"{scene_id}_snapshot.png"
 
     env.reset(seed=row["seed"], options={"block_overrides": overrides})
+
+    # Recolor the target block so it's unambiguous in the rendered videos.
+    # Default orange (0.9, 0.5, 0.1) -> bright cyan-green for the target.
+    # Must be done AFTER reset() because the env rebuild may reset visuals.
+    # NOTE: scene.actors keys by `block_i_j` (row_col); env.blocks is the
+    # flat row-major list that target_idx indexes into.
+    target_name = f"block_{int(row['target_idx'])}"
+    try:
+        target_actor = env.unwrapped.blocks[int(row["target_idx"])]
+        for ent in target_actor._objs:
+            rb = ent.find_component_by_type(sapien.render.RenderBodyComponent)
+            if rb is None:
+                continue
+            for shape in rb.render_shapes:
+                if not hasattr(shape, "parts"):
+                    continue
+                for part in shape.parts:
+                    if hasattr(part, "material"):
+                        part.material.base_color = [0.05, 0.85, 0.35, 1.0]
+    except Exception as exc:
+        log.warning("%s [%s] target recolor failed: %s", category, scene_id, exc)
+
     _save_snapshot(env, snapshot_path)
 
     # Manually build SkillContext (we already reset). Mirror what reset() does.
@@ -223,8 +250,6 @@ def render_one(category: str, row: dict):
     ctx.curobo_planner = CuroboPlanner(env)
     ctx.objects = get_objects(env)
     ctx._build_skills()
-
-    target_name = f"block_{int(row['target_idx'])}"
     try:
         result = ctx.pick(target_name, lift_height=0.12)
         log.info("%s [%s]: success=%s reason=%s",
@@ -232,6 +257,22 @@ def render_one(category: str, row: dict):
     except Exception as exc:
         log.warning("%s [%s] raised: %s", category, scene_id, exc)
         result = None
+
+    # Keep recording 30 frames after Pick returns so the viewer can see what
+    # actually happened to the cube. env.step(None) advances physics without
+    # overriding the drive targets, so the arm holds its terminal lift pose
+    # and the gripper stays at whatever value Pick last commanded (closed for
+    # a real grasp, open for early failures). Avoid building a synthetic
+    # action here: reading finger qpos and converting back to a {-1, +1}
+    # gripper command races contact compliance (a cube held between fingers
+    # sits at finger=0.02 and is indistinguishable from a "barely-open"
+    # gripper), which is what caused the gripper to release mid-tail in the
+    # first render.
+    try:
+        for _ in range(30):
+            env.step(None)
+    except Exception as exc:
+        log.warning("%s [%s] post-pick tail raised: %s", category, scene_id, exc)
 
     env.flush_video(name=scene_id, save=True)
     env.close()

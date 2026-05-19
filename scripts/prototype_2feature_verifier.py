@@ -29,7 +29,7 @@ from sklearn.metrics import (
 
 ROBOT_BASE_X = -0.615
 OUT = Path("/common/home/st1122/Projects/ms-taskbench/outputs/controller_eval")
-ANALYSIS = OUT / "analysis"
+ANALYSIS = OUT / "analysis_c21"
 PROTO = ANALYSIS / "verifier_prototype"
 PROTO.mkdir(parents=True, exist_ok=True)
 
@@ -163,8 +163,8 @@ def evaluate(model, name, X_train, y_train, X_test, y_test, save_path):
 
 
 def main():
-    X_in, y_in, ids_in, _ = load_features(OUT / "c18_workspace_gate.parquet")
-    X_oos, y_oos, ids_oos, _ = load_features(OUT / "c19_oos_seed98765.parquet")
+    X_in, y_in, ids_in, _ = load_features(OUT / "c21_correct_eval.parquet")
+    X_oos, y_oos, ids_oos, _ = load_features(OUT / "c21_correct_eval_oos.parquet")
     print(f"Train (in-sample c18): n={len(y_in)}, success_rate={y_in.mean():.3f}")
     print(f"Test (OOS c19):        n={len(y_oos)}, success_rate={y_oos.mean():.3f}")
 
