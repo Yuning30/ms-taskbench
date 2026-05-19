@@ -28,6 +28,7 @@ _LEG_BY_REASON = {
     "grasp_approach_failed": "grasp_approach",
     "grasp_verification_failed": "grasp_verify",
     "lift_failed": "lift",
+    "post_lift_slip": "post_lift_slip",
     "out_of_workspace": "workspace_gate",
 }
 
@@ -128,6 +129,15 @@ def run_pick_sample(
     target_name = f"block_{spec.target_idx}"
     target_obj = ctx.objects[target_name]
 
+    # Read the post-settle block poses straight from the env so the recorded
+    # features match what the controller actually saw. Padded slots keep the
+    # spec's parked-below-table pose.
+    actual_poses = spec.block_poses.astype(np.float64, copy=True)
+    for i in range(n):
+        if not bool(spec.block_mask[i]):
+            continue
+        actual_poses[i] = _read_object_pose(ctx.objects[f"block_{i}"])
+
     robot_qpos = _read_robot_qpos(env)
 
     use_alarm = _alarm_supported() and pick_timeout_s > 0
@@ -171,7 +181,7 @@ def run_pick_sample(
         source=spec.source,
         grid_rows=spec.grid_rows,
         grid_cols=spec.grid_cols,
-        block_poses=spec.block_poses.astype(np.float64, copy=True),
+        block_poses=actual_poses,
         block_mask=spec.block_mask.astype(bool, copy=True),
         target_idx=int(spec.target_idx),
         robot_qpos=robot_qpos,
