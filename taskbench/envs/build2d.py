@@ -109,7 +109,8 @@ class Build2DEnv(TaskEnv):
                     half_size=0.012,
                     color=[0.2, 0.6, 1.0, 0.35],
                     name=name,
-                    body_type="kinematic",
+                    body_type="static",
+                    add_collision=False,
                     initial_pose=sapien.Pose(p=[x, y, 0.012]),
                 )
                 self.target_markers.append(marker)
@@ -173,23 +174,35 @@ class Build2DEnv(TaskEnv):
                     p = torch.tensor(arr[k, :3], device=self.device).expand(b, 3).clone()
                     q = torch.tensor(arr[k, 3:], device=self.device).expand(b, 4).clone()
                     block.set_pose(Pose.create_from_pq(p=p, q=q))
-                return
-
-            sampler = randomization.UniformPlacementSampler(
-                bounds=[[-0.26, -0.2], [-0.12, 0.2]],
-                batch_size=b,
-                device=self.device,
-            )
-            radius = torch.linalg.norm(torch.tensor([0.02, 0.02])) + 0.001
-            xyz = torch.zeros((b, 3))
-            xyz[:, 2] = 0.02
-            for block in self.blocks:
-                xy = sampler.sample(radius, 100, verbose=False)
-                xyz[:, :2] = xy
-                qs = randomization.random_quaternions(
-                    b, lock_x=True, lock_y=True, lock_z=False
+            else:
+                sampler = randomization.UniformPlacementSampler(
+                    bounds=[[-0.26, -0.2], [-0.12, 0.2]],
+                    batch_size=b,
+                    device=self.device,
                 )
-                block.set_pose(Pose.create_from_pq(p=xyz.clone(), q=qs))
+                radius = torch.linalg.norm(torch.tensor([0.02, 0.02])) + 0.001
+                xyz = torch.zeros((b, 3))
+                xyz[:, 2] = 0.02
+                for block in self.blocks:
+                    xy = sampler.sample(radius, 100, verbose=False)
+                    xyz[:, :2] = xy
+                    qs = randomization.random_quaternions(
+                        b, lock_x=True, lock_y=True, lock_z=False
+                    )
+                    block.set_pose(Pose.create_from_pq(p=xyz.clone(), q=qs))
+
+            # Settle pass: step the physics scene with no controls so blocks
+            # come to rest before the episode starts. Without this, blocks
+            # placed via overrides (or scattered by the sampler) carry tiny
+            # contact-resolution velocities into the first observed frame,
+            # which shows up as visible jitter in recorded video and as
+            # noisy initial-pose features for the verifier.
+            import os as _os
+            n_settle = int(_os.environ.get("TASKBENCH_BUILD2D_SETTLE_STEPS", "10"))
+            if n_settle > 0 and not self.gpu_sim_enabled:
+                px = self.scene.px
+                for _ in range(n_settle):
+                    px.step()
 
     def get_objects(self) -> dict[str, object]:
         return {f"block_{i}": b for i, b in enumerate(self.blocks)}
