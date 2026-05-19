@@ -253,7 +253,7 @@ def follow_path(env, result, gripper_state, robot_config: RobotConfig,
     return obs, reward, terminated, truncated, info
 
 
-def actuate_gripper(env, planner, gripper_state, steps=6, step_callback=None):
+def actuate_gripper(env, planner, gripper_state, steps=25, step_callback=None):
     """Open or close the gripper for a number of steps."""
     robot = env.unwrapped.agent.robot
     control_mode = env.unwrapped.control_mode

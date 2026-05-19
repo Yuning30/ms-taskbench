@@ -610,7 +610,7 @@ class Pick(Skill):
         # number of hold-steps from the default 6. c11: TASKBENCH_CUROBO_TWO_STAGE_CLOSE
         # does a two-stage close (half, hold, full) - each stage exerts less
         # torque on the wrist than a single full close.
-        _gsteps = int(os.environ.get("TASKBENCH_CUROBO_GRIPPER_STEPS", "6"))
+        _gsteps = int(os.environ.get("TASKBENCH_CUROBO_GRIPPER_STEPS", "25"))
         if os.environ.get("TASKBENCH_CUROBO_TWO_STAGE_CLOSE", "0") == "1":
             actuate_gripper(env, self.planner, 0.0,
                             steps=10,
@@ -631,6 +631,15 @@ class Pick(Skill):
                                   failure_reason="grasp_verification_failed",
                                   grasp_pose=grasp_pose)
 
+        # Snapshot the object's z at grasp time so we can verify the lift
+        # actually moved it (see post-lift check below).
+        _grasp_p = obj.pose.p
+        try:
+            _grasp_p = _grasp_p.cpu().numpy()
+        except Exception:
+            _grasp_p = np.asarray(_grasp_p)
+        grasp_z = float(np.asarray(_grasp_p, dtype=np.float64).flatten()[2])
+
         # Phase 3: lift.
         lift_ok = bool(result.lift_success.any()) if result.lift_success is not None else True
         if not lift_ok or result.lift_interpolated_trajectory is None:
@@ -643,6 +652,36 @@ class Pick(Skill):
             last_tstep=result.lift_interpolated_last_tstep,
             step_callback=self.step_callback,
         )
+
+        # Post-lift verification. is_grasping at close-time only checks for
+        # >=0.5N contact on each finger; a cube can register that briefly and
+        # then slip out as soon as the lift starts. Require BOTH:
+        #   (a) the gripper is still grasping after the lift trajectory, and
+        #   (b) the object's z has risen by at least 60% of lift_height.
+        # Threshold via TASKBENCH_CUROBO_POSTLIFT_FRAC (default 0.6).
+        if verify_grasp:
+            _post_p = obj.pose.p
+            try:
+                _post_p = _post_p.cpu().numpy()
+            except Exception:
+                _post_p = np.asarray(_post_p)
+            post_z = float(np.asarray(_post_p, dtype=np.float64).flatten()[2])
+            _frac = float(os.environ.get("TASKBENCH_CUROBO_POSTLIFT_FRAC", "0.6"))
+            min_rise = _frac * float(lift_height)
+            is_still_holding = bool(
+                raw.agent.is_grasping(obj).cpu().numpy().item()
+            )
+            if (not is_still_holding) or (post_z - grasp_z < min_rise):
+                logger.info(
+                    "post-lift slip: holding=%s dz=%.4fm (need>=%.4fm)",
+                    is_still_holding, post_z - grasp_z, min_rise,
+                )
+                return PickResult(
+                    success=False,
+                    failure_reason="post_lift_slip",
+                    grasp_pose=grasp_pose,
+                    obj_size=obj_size,
+                )
 
         return PickResult(
             success=True,
