@@ -38,6 +38,7 @@ for i in $(seq 0 $((N-1))); do
   LOG="$OUT/${TASK_NAME}.log"
   SEED=$((BASE_SEED + i * 1000000))
   OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
+    CUDA_VISIBLE_DEVICES="" \
     nohup uv run --project "$REPO_ROOT" python -m taskbench.data.collect \
       --n "$M" \
       --grid-rows "$GR" --grid-cols "$GC" \
