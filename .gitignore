@@ -12,7 +12,11 @@ outputs/
 videos/
 videos_old/
 replay_videos/
-data/
+data
+slurm_logs/
+
+# Superpowers tooling scratch
+docs/superpowers/
 
 # OS
 .DS_Store
