@@ -82,10 +82,16 @@ class StackCubesSolver(BaseSolver):
                 self._save_recording(recorder, seed, result)
                 return result
 
-            # Compute release pose: above target at lift height
+            # Compute release pose so the cube center lands at goal_pose.
+            # Use the *actual* TCP and held-cube positions (not the planned
+            # lift_pose) since the planner has up to ~5mm tracking error,
+            # which is too tight when stacking cube-on-cube.
             goal_pose = target_actor.pose * sapien.Pose([0, 0, cube_height])
-            offset = (goal_pose.p - pick_actor.pose.p).cpu().numpy()[0]
-            release_p = pick_result.lift_pose.p + offset
+            goal_p = goal_pose.p.cpu().numpy().flatten()[:3]
+            tcp_now = raw.agent.tcp.pose.p.cpu().numpy().flatten()[:3]
+            cube_now = pick_actor.pose.p.cpu().numpy().flatten()[:3]
+            tcp_to_cube = cube_now - tcp_now  # world-frame offset
+            release_p = goal_p - tcp_to_cube
             release_q = pick_result.lift_pose.q
 
             logger.info(f"Step {i+1}/{total_steps}: placing {pick_name} on {target_name}...")
