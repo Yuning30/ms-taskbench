@@ -136,6 +136,11 @@ class ProgramSynthesisSolver(BaseSolver):
         self.eval_seeds_raw = kwargs.get("eval_seeds", kwargs.get("seeds"))
         self.demo_dir: str = str(kwargs.get("demo_dir", "data/success"))
         self.kl_samples: int = int(kwargs.get("kl_samples", 10000))
+        # Bonus added to the score per unit of success_rate (fraction of eval
+        # seeds whose env.evaluate() returns True after the program ran).
+        # 0.0 reproduces the pure-KL objective; >0 closes the proxy-vs-task
+        # gap by directly rewarding task completion.
+        self.task_reward_weight: float = float(kwargs.get("task_reward_weight", 0.0))
 
     def _parse_eval_seeds(self, cfg: DictConfig, fallback_seed: int) -> list[int]:
         """Resolve evaluation seeds from solver kwargs or fallback to one seed."""
@@ -299,7 +304,13 @@ class ProgramSynthesisSolver(BaseSolver):
             expert_states_total,
             n_samples=self.kl_samples,
         )
-        return float(total_kl), float(-total_kl)
+        score = -float(total_kl)
+        if self.task_reward_weight > 0.0:
+            success_rate = sum(
+                1 for r in per_seed_results if r.get("success")
+            ) / max(1, len(per_seed_results))
+            score += self.task_reward_weight * float(success_rate)
+        return float(total_kl), float(score)
 
     def _normalize_quaternions(self, program: Program) -> None:
         """Normalize any instruction `args["quat"]` to unit length."""
@@ -370,9 +381,12 @@ class ProgramSynthesisSolver(BaseSolver):
             [_load_expert_states_for_seed(s, self.demo_dir) for s in eval_seeds],
             axis=0,
         )
+        # Tag candidate-log filename with task_reward_weight so parallel runs
+        # with different weights don't clobber each other's logs.
+        tw_tag = f"_tw{self.task_reward_weight:g}".replace(".", "p")
         candidate_log_path = Path("outputs") / (
             f"program_synthesis_candidates_seed{int(seed)}_"
-            f"n{len(eval_seeds)}.jsonl"
+            f"n{len(eval_seeds)}{tw_tag}.jsonl"
         )
         candidate_log_path.parent.mkdir(parents=True, exist_ok=True)
         candidate_log_rows: list[dict[str, Any]] = []
@@ -456,7 +470,7 @@ class ProgramSynthesisSolver(BaseSolver):
                 )
 
                 # Metropolis acceptance ratio; higher is better.
-                acceptance_ratio = math.exp(proposed_cost - current_cost)
+                acceptance_ratio = math.exp(min(0.0, proposed_cost - current_cost))
                 u = random.random()
                 accepted = u < acceptance_ratio
                 if accepted:

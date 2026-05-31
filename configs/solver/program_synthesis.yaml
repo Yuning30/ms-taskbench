@@ -26,6 +26,9 @@ run:
     demo_dir: data/success
     # Number of sampled points for KDE-based KL estimation.
     kl_samples: 10000
+    # Bonus added to the score per unit success_rate. 0.0 = pure KL objective;
+    # >0 directly rewards programs that complete the task.
+    task_reward_weight: 0.0
 
 env:
   env_id: StackNCube-v1
