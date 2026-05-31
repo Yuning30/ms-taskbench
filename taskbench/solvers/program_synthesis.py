@@ -15,15 +15,48 @@ import numpy as np
 from omegaconf import DictConfig, OmegaConf
 from scipy.stats import gaussian_kde
 
+from taskbench.envs.factory import make_single_env
+from taskbench.programs.executor import execute_program
 from taskbench.programs.ir import Instruction, Program
 from taskbench.programs.cem import cem_optimize
 from taskbench.programs.params import apply_float_parameters, extract_float_parameters
 from taskbench.programs.mcmc import sample_proportional, swap_two_elements_maybe_same
 from taskbench.programs.synthesis import evaluate_program
+from taskbench.skills.context import SkillContext
 from taskbench.solver import BaseSolver, SolverResult, register_solver
 
 logger = logging.getLogger("taskbench.solvers.program_synthesis")
 _EXPERT_STATE_CACHE: dict[tuple[str, int], np.ndarray] = {}
+
+# Per-worker process cache: a single SAPIEN env + SkillContext is built once
+# (during Pool initializer) and reused across all cost-fn calls in that worker.
+# Without this, each cost-fn call would pay a fresh ~10s cuRobo warmup plus a
+# SAPIEN env construction (~7s), which dominates the wall time and triggers
+# Vulkan contention when multiple workers init concurrently.
+_WORKER_ENV = None
+_WORKER_CTX = None
+
+
+def _extract_state_positions(raw, objects):
+    """Flatten [tcp_pos, sorted object positions] for state-occupancy KL."""
+    tcp_pos = np.asarray(raw.agent.tcp.pose.p, dtype=np.float64).flatten()[:3]
+    parts = [tcp_pos]
+    for name in sorted(objects.keys()):
+        pos = np.asarray(objects[name].pose.p, dtype=np.float64).flatten()[:3]
+        parts.append(pos)
+    return np.concatenate(parts, axis=0)
+
+
+def _worker_init(cfg_yaml: str, lock):
+    """Pool initializer: build env + SkillContext under a shared Lock so
+    cuRobo / SAPIEN-Vulkan don't try to init in N processes simultaneously."""
+    global _WORKER_ENV, _WORKER_CTX
+    with lock:
+        cfg = OmegaConf.create(cfg_yaml)
+        _WORKER_ENV = make_single_env(cfg.env)
+        _WORKER_CTX = SkillContext(_WORKER_ENV)
+        # Eagerly trigger cuRobo build so the lock-serialized phase covers it.
+        _WORKER_CTX.reset(seed=0)
 
 
 def _load_expert_states_for_seed(seed: int, demo_dir: str) -> np.ndarray:
@@ -83,10 +116,36 @@ def _evaluate_program_for_seed(
     skip_steps: int,
     eval_seed: int,
 ) -> dict[str, Any]:
-    """Evaluate one program on one seed in an isolated process."""
-    cfg = OmegaConf.create(cfg_yaml)
-    OmegaConf.update(cfg, "seed", int(eval_seed))
-    exec_res = evaluate_program(cfg, program, skip_steps=skip_steps)
+    """Evaluate one program on one seed, reusing the worker-cached env+ctx.
+
+    Falls back to a fresh build if the worker wasn't initialized via
+    ``_worker_init`` (e.g., synchronous in-process call from a test).
+    """
+    global _WORKER_ENV, _WORKER_CTX
+    if _WORKER_ENV is None:
+        cfg = OmegaConf.create(cfg_yaml)
+        _WORKER_ENV = make_single_env(cfg.env)
+        _WORKER_CTX = SkillContext(_WORKER_ENV)
+
+    env = _WORKER_ENV
+    ctx = _WORKER_CTX
+
+    trajectory: list = []
+    state_positions: list = []
+
+    def _record_step(*args):
+        if len(args) == 5:
+            trajectory.append(args)
+        state_positions.append(_extract_state_positions(env.unwrapped, ctx.objects))
+
+    # Re-bind the recorder so each rollout captures only its own transitions,
+    # then re-seed and re-sync skills (cuRobo planner is reused).
+    ctx.step_callback = _record_step
+    ctx.reset(seed=int(eval_seed))
+    state_positions.append(_extract_state_positions(env.unwrapped, ctx.objects))
+
+    exec_res = execute_program(ctx, program, step_buffer=trajectory, skip_steps=skip_steps)
+    exec_res.info["state_positions"] = np.asarray(state_positions, dtype=np.float64)
     cand_states = np.asarray(exec_res.info.get("state_positions", []), dtype=np.float64)
     return {
         "seed": int(eval_seed),
@@ -401,7 +460,16 @@ class ProgramSynthesisSolver(BaseSolver):
         initial_program = self._build_initial_program(cfg)
 
         mp_ctx = mp.get_context("spawn")
-        with mp_ctx.Pool(processes=workers) as pool:
+        # Manager + Lock: the lock is acquired in each worker's `_worker_init`,
+        # serializing the cuRobo + SAPIEN-Vulkan first-time init across workers
+        # so they don't fight for the GPU at startup.
+        manager = mp_ctx.Manager()
+        init_lock = manager.Lock()
+        with mp_ctx.Pool(
+            processes=workers,
+            initializer=_worker_init,
+            initargs=(cfg_yaml, init_lock),
+        ) as pool:
             def _cost_fn(p: Program) -> float:
                 per_seed = self._evaluate_program_across_seeds(
                     cfg_yaml=cfg_yaml,

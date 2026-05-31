@@ -82,14 +82,38 @@ Robot-specific constants live in `RobotConfig` (`taskbench/skills/robot_config.p
 - **`taskbench/skills/robot_config.py`** — `RobotConfig` dataclass + `ROBOT_CONFIGS` registry.
 - **`taskbench/skills/context.py`** — `SkillContext` — bundles env + planner + objects + skills.
 - **`taskbench/skills/motion.py`** — Low-level mplib helpers: `setup_planner()`, `move_to_pose()` (straight-line screw interpolation, no RRT), `build_action()`, `PoseLike`.
-- **`taskbench/skills/primitives.py`** — Composable skill objects with `SkillResult` dataclasses.
+- **`taskbench/skills/mplib_primitives.py`** — mplib-backed `Pick` / `Place` / `Move` / `Push`. Kept available; not the default.
+- **`taskbench/skills/curobo_planner.py`** / **`taskbench/skills/curobo_motion.py`** / **`taskbench/skills/curobo_primitives.py`** — cuRobo motion backend. `SkillContext` binds to these by default; the mplib variants stay importable.
 - **`taskbench/recorder.py`** — `StateRecorder` for capturing simulation state to HDF5.
 - **`taskbench/logger.py`** — Optional WandB logging wrapper.
 
-### Critical Constraints (mplib / ManiSkill)
+### Critical Constraints
 
+#### Shared
+- **SAPIEN poses are batched**: Even with `num_envs=1`, pose tensors have shape `(1, 3)` / `(1, 4)` — must `.flatten()` before use.
+- **numpy < 2.0** required by mplib 0.2.1.
+
+#### mplib backend
 - **mplib 0.2.x API**: Uses `mplib.pymp.Pose` objects (not numpy arrays) for `set_base_pose()`, `plan_screw()`, etc.
-- **SAPIEN poses are batched**: Even with `num_envs=1`, pose tensors have shape `(1, 3)` / `(1, 4)` — must `.flatten()` before passing to mplib.
 - **Motion planner requires**: `num_envs=1`, `sim_backend="cpu"`, `pd_joint_pos` control mode, no `ManiSkillVectorEnv` wrapper.
 - **Video recording with planner**: Must use `save_on_reset=False` on `RecordEpisode` and call `env.flush_video()` manually.
-- **numpy < 2.0** required by mplib 0.2.1.
+
+#### cuRobo backend (default for `SkillContext`)
+- **Optional dependency**: install with `uv sync --extra curobo`. Requires a Vulkan-capable NVIDIA GPU.
+- **Control mode**: cuRobo's trajectory follower emits 7-dim joint targets, so the env must use `pd_joint_pos_vel` (preferred — enables velocity feedforward) or `pd_joint_pos`. The legacy `pd_ee_delta_pose` raises `ValueError: pd_ee_delta_pose expects 6-dim delta action, got 7`. The default solver configs still set `pd_ee_delta_pose`; override on the command line: `env.control_mode=pd_joint_pos_vel`.
+- **Warmup cost**: first `SkillContext.reset()` takes ~5–10s to build cuRobo. Reused across episodes inside the same `SkillContext`.
+- **Stack release pose**: when placing a cube on top of another cube, the solver MUST compute the TCP target from the *actual* TCP and held-cube positions (see `taskbench/solvers/stack_n_cubes.py`), not from `pick_result.lift_pose`. cuRobo has ~5mm tracking error on the lift; using `lift_pose` directly produces a placement target ~6mm too low, which intersects the underlying cube and topples the tower.
+- **Retract**: `CuroboPlace` re-syncs the cuRobo collision scene with no exclusion *after* settle and *before* retract so the just-placed cube is treated as an obstacle (otherwise the lifted hand can curl laterally and brush the cube off).
+
+#### SAPIEN + multi-process (`program_synthesis` solver)
+- SAPIEN initializes a Vulkan instance even when `obs_mode="state"` because `PandaWristCam` mounts a camera. When N spawn workers init concurrently, expect one of: `Failed to find a supported physical device "cuda:0"`, `vk::PhysicalDevice::createDeviceUnique: ErrorInitializationFailed`, or `CUDA error: an illegal memory access was encountered` on the first real rollout.
+- `ProgramSynthesisSolver` works around this with:
+  1. **Per-worker env+SkillContext cache** (`_WORKER_ENV`, `_WORKER_CTX`) — env is built once per worker process and reused via `env.reset(seed=…)` across cost-fn calls, so the cuRobo warmup is paid once per worker, not once per cost-fn.
+  2. **`multiprocessing.Manager().Lock()`** passed to the Pool initializer, which serializes the cuRobo first-init across workers (only one builds cuRobo at a time).
+- **Known unresolved issue — `num_workers > 1` crashes after a few real CEM iters** with `CUDA error: an illegal memory access was encountered`, regardless of GPU VRAM (observed identical failures on 16 GB, 20 GB, and 48 GB cards). The init-Lock fixes the Vulkan startup race, but a separate cross-process cuRobo / CUDA-stream interaction surfaces once thousands of plans flow through 5 workers. Until this is root-caused, `num_workers=1` is the only safe setting (~5× slower than the design intent). A small diagnostic with `cem_iters=2, cem_N=3` will pass with `num_workers=5` and mask the bug — verify with a real-sized CEM (≥ 1 full CEM iter at `cem_N=64`).
+- **`task_reward_weight` kwarg**: synthesis cost is `-KL(rollout ‖ expert)` by default. Set `run.solver_kwargs.task_reward_weight=10.0` to add `λ · success_rate` to the score, directly rewarding programs whose env `evaluate()` returns True (closes the proxy-vs-task gap in pure-KL runs).
+- **Candidate log filename**: includes both `n{eval_seeds}` and `_tw{weight}` tags so parallel runs with different hyperparams don't clobber each other (`outputs/program_synthesis_candidates_seed{S}_n{N}_tw{W}.jsonl`).
+
+### Demo collection conventions
+- `solver=stack_cubes` writes one HDF5 per episode to either `data/success/episode_seed{N}.hdf5` or `data/failure/episode_seed{N}.hdf5`, depending on the solver's *internal* placement check (NOT the env's `evaluate()` — the two can disagree at the edges).
+- `ProgramSynthesisSolver` reads expert demos directly from `data/success/episode_seed{N}.hdf5` for the seeds listed in `run.solver_kwargs.eval_seeds`. There is no quality grading or re-evaluation; the directory split is the only filter.
