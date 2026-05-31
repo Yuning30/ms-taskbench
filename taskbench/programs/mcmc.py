@@ -81,7 +81,7 @@ def mcmc_optimize_program(
         proposed_cost = cost_fn(proposed_program)
 
         # Metropolis-Hastings acceptance ratio; higher cost is better.
-        acceptance_ratio = math.exp(proposed_cost - current_cost)
+        acceptance_ratio = math.exp(min(0.0, proposed_cost - current_cost))
         if random.random() < acceptance_ratio:
             current_program = proposed_program
             current_cost = proposed_cost
