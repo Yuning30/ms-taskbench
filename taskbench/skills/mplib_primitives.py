@@ -1,29 +1,37 @@
-"""Reusable manipulation skills as composable objects.
+"""mplib-backed manipulation skills (``MplibPick``/``Place``/``Move``/``Push``).
 
-Each skill binds shared context (env, planner, robot_config, step_callback)
-at construction, exposing only task-specific parameters in ``__call__``:
+The original trivial Pick/Place/Move/Push implementation. Each skill plans
+straight-line Cartesian motion via ``mplib.Planner.plan_screw`` and executes
+the resulting joint trajectory.
 
-    pick = Pick(env, planner, robot_config=rc, objects=objects)
+For the cuRobo-backed variants used by ``SkillContext`` by default, see
+``taskbench.skills.curobo_primitives``.
+
+Usage::
+
+    pick = MplibPick(env, planner, robot_config=rc, objects=objects)
     result = pick("cube_1", lift_height=0.1)
-
-Base class ``Skill`` provides the common interface. All skills return a
-dataclass result with ``success`` and ``failure_reason`` fields.
 """
 
 import logging
-from abc import ABC, abstractmethod
-from dataclasses import dataclass
-from typing import Callable, Optional
+from typing import Optional
 
 import numpy as np
 import sapien
-from transforms3d.euler import euler2quat, quat2euler
+from transforms3d.euler import euler2quat
 
 from mani_skill.examples.motionplanning.base_motionplanner.utils import (
     compute_grasp_info_by_obb,
     get_actor_obb,
 )
 
+from taskbench.skills.base import (
+    MoveResult,
+    PickResult,
+    PlaceResult,
+    PushResult,
+    Skill,
+)
 from taskbench.skills.motion import (
     PoseLike,
     actuate_gripper,
@@ -32,116 +40,16 @@ from taskbench.skills.motion import (
     move_to_pose,
     to_sapien_pose,
 )
-from taskbench.skills.robot_config import RobotConfig, get_robot_config
 
-logger = logging.getLogger("taskbench.skills.primitives")
-
-
-def _axis_aligned_quat_from_tcp(raw) -> list[float]:
-    """Return an axis-aligned quaternion based on current TCP orientation.
-
-    We:
-    - read the current TCP quaternion ``raw.agent.tcp.pose.q`` (SAPIEN: [w, x, y, z])
-    - convert to Euler angles
-    - snap each angle to nearest multiple of 90 degrees
-    - convert back to quaternion (SAPIEN [w, x, y, z])
-    """
-    tcp_q = raw.agent.tcp.pose.q
-    try:
-        tcp_q = tcp_q.cpu().numpy()
-    except Exception:
-        tcp_q = np.asarray(tcp_q)
-    tcp_q = np.asarray(tcp_q, dtype=np.float64).flatten()[:4]
-
-    # transforms3d expects quaternion as [w, x, y, z] here (consistent with euler2quat usage).
-    ai, aj, ak = quat2euler(tcp_q)
-    step = np.pi / 2.0
-    ai_s = float(np.round(ai / step) * step)
-    aj_s = float(np.round(aj / step) * step)
-    ak_s = float(np.round(ak / step) * step)
-    q = euler2quat(ai_s, aj_s, ak_s)
-    q = np.asarray(q, dtype=np.float64).flatten()[:4]
-    # Numerical safety.
-    norm = float(np.linalg.norm(q))
-    if norm > 1e-8:
-        q = q / norm
-    return [float(x) for x in q]
-
-
-# ---------------------------------------------------------------------------
-# Result dataclasses
-# ---------------------------------------------------------------------------
-
-@dataclass
-class SkillResult:
-    """Base result for all skills."""
-    success: bool
-    failure_reason: Optional[str] = None
-    step_result: Optional[tuple] = None
-
-
-@dataclass
-class MoveResult(SkillResult):
-    pass
-
-
-@dataclass
-class PickResult(SkillResult):
-    grasp_pose: Optional[sapien.Pose] = None
-    lift_pose: Optional[sapien.Pose] = None
-    obj_size: Optional[np.ndarray] = None
-
-
-@dataclass
-class PlaceResult(SkillResult):
-    pass
-
-
-@dataclass
-class PushResult(SkillResult):
-    pass
-
-
-# ---------------------------------------------------------------------------
-# Base skill
-# ---------------------------------------------------------------------------
-
-class Skill(ABC):
-    """Base class for manipulation skills.
-
-    Binds shared context (env, planner, robot_config, objects, step_callback)
-    so that ``__call__`` only receives task-specific parameters.
-
-    Args:
-        env: Gym env (raw or wrapped).
-        planner: mplib.Planner instance.
-        robot_config: Robot-specific constants. If None, auto-detected
-            from the env's agent.
-        objects: Dict mapping string names to scene actors.
-            Skills that need actors (e.g. Pick) resolve names through this.
-        step_callback: Optional callable invoked after each env.step().
-    """
-
-    def __init__(self, env, planner, *, robot_config: Optional[RobotConfig] = None,
-                 objects: Optional[dict[str, object]] = None,
-                 step_callback: Optional[Callable] = None):
-        self.env = env
-        self.planner = planner
-        self.robot_config = robot_config or get_robot_config(env)
-        self.objects = objects or {}
-        self.step_callback = step_callback
-
-    @abstractmethod
-    def __call__(self, *args, **kwargs) -> SkillResult:
-        ...
+logger = logging.getLogger("taskbench.skills.mplib_primitives")
 
 
 # ---------------------------------------------------------------------------
 # Move
 # ---------------------------------------------------------------------------
 
-class Move(Skill):
-    """Move the arm to a target pose.
+class MplibMove(Skill):
+    """Move the arm to a target pose (mplib ``plan_screw``).
 
     Args (at call time):
         target_pose: PoseLike to move the end effector to.
@@ -202,8 +110,8 @@ class Move(Skill):
 # Pick
 # ---------------------------------------------------------------------------
 
-class Pick(Skill):
-    """Grasp an object and lift it.
+class MplibPick(Skill):
+    """Grasp an object and lift it (mplib backend).
 
     Internally: compute grasp from OBB, search rotation candidates,
     reach, approach, close gripper, verify grasp, lift.
@@ -220,7 +128,7 @@ class Pick(Skill):
         obj = self.objects[obj_name]
         env, planner, rc = self.env, self.planner, self.robot_config
         raw = env.unwrapped
-        move = Move(env, planner, robot_config=rc, step_callback=self.step_callback)
+        move = MplibMove(env, planner, robot_config=rc, step_callback=self.step_callback)
 
         # Compute grasp pose from OBB
         obb = get_actor_obb(obj)
@@ -306,8 +214,8 @@ class Pick(Skill):
 # Place
 # ---------------------------------------------------------------------------
 
-class Place(Skill):
-    """Move to target pose, release the held object, and retract upward.
+class MplibPlace(Skill):
+    """Move to target pose, release the held object, and retract upward (mplib backend).
 
     Args (at call time):
         target_pose: PoseLike where the gripper moves before releasing.
@@ -353,7 +261,7 @@ class Place(Skill):
         else:
             target_pose = to_sapien_pose(target_pose_or_cube)
         env, planner, rc = self.env, self.planner, self.robot_config
-        move = Move(env, planner, robot_config=rc, step_callback=self.step_callback)
+        move = MplibMove(env, planner, robot_config=rc, step_callback=self.step_callback)
 
         # Move to target pose (contacts off — gripper is holding an object)
         result = move(target_pose, gripper_open=False, monitor_contacts=False)
@@ -389,8 +297,8 @@ class Place(Skill):
 # Push
 # ---------------------------------------------------------------------------
 
-class Push(Skill):
-    """Lift for clearance, close gripper, approach, sweep, lift, open.
+class MplibPush(Skill):
+    """Lift for clearance, close gripper, approach, sweep, lift, open (mplib backend).
 
     Args (at call time):
         approach_pose: PoseLike to move to before pushing (no contact).
@@ -406,7 +314,7 @@ class Push(Skill):
         push_pose = to_sapien_pose(push_pose)
         env, planner, rc = self.env, self.planner, self.robot_config
         raw = env.unwrapped
-        move = Move(env, planner, robot_config=rc, step_callback=self.step_callback)
+        move = MplibMove(env, planner, robot_config=rc, step_callback=self.step_callback)
 
         # Lift from current position for clearance
         tcp_pose = raw.agent.tcp.pose
