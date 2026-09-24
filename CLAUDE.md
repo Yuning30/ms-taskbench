@@ -42,7 +42,8 @@ uv run black taskbench/
 uv run isort taskbench/
 ```
 
-No tests exist in this repo.
+The RoboVerify migration has `unittest` coverage under `taskbench/roboverify/`.
+See `docs/roboverify.md` for the test command and simulator validation workflow.
 
 ## Architecture
 

@@ -12,6 +12,7 @@ class SolverResult:
     elapsed_steps: int = 0
     info: dict = field(default_factory=dict)
     failure_reason: Optional[str] = None
+    verification_status: Optional[str] = None
 
 
 class BaseSolver(ABC):
@@ -20,6 +21,8 @@ class BaseSolver(ABC):
     Subclasses must implement ``solve()``. Env config requirements (control_mode,
     num_envs, etc.) are declared in the solver's Hydra config group YAML, not here.
     """
+
+    requires_env = True
 
     @abstractmethod
     def solve(self, env, seed=None, cfg=None) -> SolverResult:

@@ -279,7 +279,6 @@ class Pick(Skill):
         move = Move(env, planner, robot_config=rc, step_callback=self.step_callback)
 
         ee_naive_ok = raw.control_mode in ("pd_ee_delta_pos", "pd_ee_delta_pose")
-        import pdb; pdb.set_trace()
         if naive and not ee_naive_ok:
             logger.warning(
                 "Pick naive=True needs pd_ee_delta_pos/pd_ee_delta_pose; "

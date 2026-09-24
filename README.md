@@ -46,6 +46,12 @@ uv run python -m taskbench.programs.build2d_demo --rows 3 --cols 4
 
 ### StackNCube
 
+**RoboVerify synthesis and verification:** the current pipeline is now copied into
+this repository and connected to ManiSkill StackNCube. See the
+[Stack synthesis/verification guide](docs/roboverify.md) for collecting compatible
+demonstrations, verifying a supplied program, and running full synthesis.
+Install its optional dependencies with `uv sync --extra roboverify`.
+
 Stack N cubes into a tower. `cube_0` (green) is always the base — the solver picks the remaining cubes in random order and stacks them on top.
 
 | Parameter | Default | Description |

@@ -13,7 +13,8 @@ videos/
 videos_old/
 replay_videos/
 data/
+runs/
+demos/
 
 # OS
 .DS_Store
-

@@ -119,26 +119,27 @@ def run_solver(config, logger: Logger):
     solver_kwargs = OmegaConf.select(config.run, "solver_kwargs", default={}) or {}
     solver = get_solver(config.run.solver, **solver_kwargs)
 
-    env = make_single_env(config.env)
+    env = make_single_env(config.env) if solver.requires_env else None
     target_episodes = config.run.num_episodes
 
     all_returns = []
     all_lengths = []
     all_successes = []
 
-    recording = config.env.record_video
+    recording = config.env.record_video and env is not None
 
     for ep in range(1, target_episodes + 1):
         result = solver.solve(env, seed=config.seed + ep, cfg=config)
 
         # Let physics settle, then check env success
-        raw = env.unwrapped
-        for _ in range(100):
-            env.step(env.action_space.sample() * 0)  # zero action
-            info = raw.evaluate()
-            if info["success"].item():
-                break
-        result.success = bool(raw.evaluate()["success"].item())
+        if env is not None and result.verification_status is None:
+            raw = env.unwrapped
+            for _ in range(100):
+                env.step(env.action_space.sample() * 0)  # zero action
+                info = raw.evaluate()
+                if info["success"].item():
+                    break
+            result.success = bool(raw.evaluate()["success"].item())
 
         if recording:
             env.flush_video()
@@ -158,6 +159,8 @@ def run_solver(config, logger: Logger):
 
         # Print extra info keys generically
         extras = []
+        if result.verification_status:
+            extras.append(f"verification={result.verification_status}")
         if result.failure_reason:
             extras.append(f"failure_reason={result.failure_reason}")
         for k in ("cubes_stacked",):
@@ -168,7 +171,8 @@ def run_solver(config, logger: Logger):
         extra_str = "  " + "  ".join(extras) if extras else ""
         print(f"[Episode {ep}/{target_episodes}]  success={result.success}  cumulative_rate={rate:.2f}{extra_str}")
 
-    env.close()
+    if env is not None:
+        env.close()
     return all_returns, all_lengths, all_successes
 
 

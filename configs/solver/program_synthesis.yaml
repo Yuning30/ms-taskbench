@@ -1,31 +1,24 @@
 # @package _global_
 run:
   solver: program_synthesis
+  num_episodes: 1
   solver_kwargs:
-    # Number of instruction slots in the initial program.
-    # All slots start as "skip" and can be rewritten by the synthesis algorithm.
-    program_length: 3
-    # How many MCMC iterations over program structure proposals.
-    mcmc_iters: 10
-    # How many environment steps to advance for each `skip` instruction
-    # during execution/evaluation.
-    skip_steps: 0
-    # CEM (continuous optimizer) hyperparameters used to optimize float-valued
-    # parameters inside instruction args.
-    cem_iters: 10
-    cem_N: 32
-    cem_K: 4
-    cem_init_std: 0.1
-    # Seeds to evaluate each candidate program on (parallel one process/seed).
-    # Empty means fallback to the runtime seed.
-    eval_seeds: []
-    # Optional process count for parallel seed evaluation.
-    # null means use len(eval_seeds).
-    num_workers: null
-    # Directory with successful expert demos named episode_seed{seed}.hdf5.
-    demo_dir: data/success
-    # Number of sampled points for KDE-based KL estimation.
-    kl_samples: 10000
+    demos: null
+    mode: full
+    synthesis_approach: id-first
+    num_blocks: 3
+    slots: 5
+    iterations: 20
+    refinements: 5
+    cem_iterations: 2
+    cem_samples: 8
+    cem_elites: 2
+    invariant_relations: [ON_star, Higher, Scattered, equality]
+    supported_towers: true
+    table_surface_height: 0.0
+    initial_arm: null
+    output_dir: runs
+    smoke: false
 
 env:
   env_id: StackNCube-v1
@@ -33,4 +26,3 @@ env:
   num_envs: 1
   reward_mode: sparse
   num_cubes: 3
-

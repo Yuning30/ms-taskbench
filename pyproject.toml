@@ -18,9 +18,13 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["black", "isort"]
+roboverify = ["z3-solver==4.15.4.0", "scipy", "sympy", "matplotlib", "scikit-learn>=1.7"]
 
 [tool.setuptools.packages.find]
 include = ["taskbench*"]
+
+[tool.setuptools.package-data]
+"taskbench.roboverify" = ["SOURCE.md", "source_manifest.json"]
 
 [tool.uv.sources]
 torch = { index = "pytorch-cu121" }
