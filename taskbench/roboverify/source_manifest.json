@@ -110,5 +110,22 @@
     "verification_lib/test_tower_geometry.py": "d8788f25361ef09ff02039262f1fa733216a79fcdd5b0f39cd5f166b1848975f",
     "verification_lib/tower_geometry.py": "30af954caeda5501d351f150bea2c774c432990ace5abd19bb3c9060750efdf0",
     "mcmc/cost_func.py": "a7037f2bf5fd860e3bf071145e2d2e9970f074d5ae83f0de31c02926da673810"
-  }
+  },
+  "updates": [
+    {
+      "source_commit": "fd8dd579796ed31e46416fdf9bcd237f5294e1d0",
+      "description": "Selective controller fixes and adapted Panda diagnostics; original import hashes retained above.",
+      "sha256": {
+        "util/actions.py": "c4c942e27f7f08f023c66349669c5da8e8c7d66bbecc16cf9cf1ad2b18c433aa",
+        "api/control.py": "f4e33b14eb5268e2fd4e3081503a4db74ee11c75e6dfded7c3949d3050214692",
+        "api/test_control.py": "e363ae21c5c184ee10e2237aa4cd6feed28b1cf92b8abd86c5772cb61a8d0a43",
+        "cfg/program_source.py": "5681425429f74870a42e11339626bf4887753902db314d3e88be69c2859e4679",
+        "experiment/compare_stack_control.py": "60ba5576691344b0fb1805a0c952e15a4fe9f6885b52f22189fd796af4e398d4",
+        "experiment/compare_stack_paths.py": "4281aca8d702a0aeee6c1258b2b726fd148aaf5042cd7c34548c5f15e3221109",
+        "experiment/controller_baseline.py": "b9321c011bae0f245fbe34a0113ce56e37c5d023b294e9e602c8647b875411a7",
+        "experiment/test_compare_stack_control.py": "ca9305f42d3dd42fb36c05b3838c1f8f5d5bd5a6a105eaf3fb31174541d2a1de",
+        "experiment/test_compare_stack_paths.py": "3cc3cd1dba0f3038fee0b4eed7964caf414d8eec5800e873ee9b044031d8c81f"
+      }
+    }
+  ]
 }

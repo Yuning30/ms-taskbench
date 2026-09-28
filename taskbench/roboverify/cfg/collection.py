@@ -230,6 +230,9 @@ def record_execution(
                 if task == "stack":
                     target = first[:3].copy()
                     inner = inner_env(env)
+                    layout = getattr(inner, "layout_sampling", None)
+                    if layout is not None:
+                        metadata["initialization"]["layout_sampling"] = dict(layout)
                     for _ in range(STACK_SETTLING_STEPS):
                         env.step(get_move_action(first, target, close_gripper=False))
                         metadata["initialization"]["settling_steps"] += 1

@@ -9,10 +9,15 @@ from copy import deepcopy
 
 import numpy as np
 
+from taskbench.roboverify.stack_reset import (
+    BLOCK_LENGTH,
+    DEFAULT_SEPARATION,
+    sample_layout,
+)
 from taskbench.roboverify.util import on
+from taskbench.roboverify.util.actions import bound_delta_action
 
 BACKEND_ID = "maniskill-stack-v1"
-BLOCK_LENGTH = 0.04
 REPLAY_ATOL = 1e-5
 
 
@@ -36,7 +41,7 @@ def flatten_state(state, prefix="state"):
 class StackBackend:
     """Single CPU Panda environment exposing RoboVerify's primitive interface."""
 
-    def __init__(self, num_blocks=3):
+    def __init__(self, num_blocks=3, *, separation=DEFAULT_SEPARATION):
         import gymnasium as gym
 
         import taskbench.envs  # noqa: F401
@@ -46,6 +51,8 @@ class StackBackend:
         if not np.isclose(on.get_block_length(), BLOCK_LENGTH):
             raise ValueError("Use using_block_length(0.04) with StackNCube")
         self.num_blocks = num_blocks
+        self.separation = separation
+        self.layout_sampling = {}
         self.simulator = gym.make(
             "StackNCube-v1",
             num_cubes=num_blocks,
@@ -74,25 +81,30 @@ class StackBackend:
             raise
 
     def reset(self, *, seed=None):
+        from mani_skill.utils.structs.pose import Pose
+
         # Current search deliberately controls numpy's global RNG per demo.
         if seed is None:
             seed = int(np.random.randint(0, 2**31))
-        for attempt in range(64):
-            self.simulator.reset(seed=(seed + attempt) % 2**32)
-            positions = [array(c.pose.p).reshape(-1)[:3] for c in self.raw.cubes]
-            if all(
-                on.scattered_implementation(a, b)
-                for i, a in enumerate(positions)
-                for b in positions[i + 1 :]
-            ):
-                break
-        else:
-            raise ValueError(
-                "Could not sample the Stack scattered precondition in 64 resets"
+        xy, statistics = sample_layout(self.num_blocks, self.separation, seed)
+        # Reset physics and retain the original per-seed cube yaw, then install
+        # the tested layout before collection's normal 50 settling steps.
+        self.simulator.reset(seed=seed)
+        for cube, position in zip(self.raw.cubes, xy):
+            cube.set_pose(
+                Pose.create_from_pq(
+                    p=np.r_[position, BLOCK_LENGTH / 2], q=array(cube.pose.q)
+                )
             )
         self.gripper_command = 1.0
         self.held_box_id = None
         self.symbolic_name_to_box_id = {}
+        self.layout_sampling = dict(
+            seed=seed,
+            separation_m=self.separation,
+            xy=xy.tolist(),
+            **statistics,
+        )
         return self._get_obs(), {}
 
     def _get_obs(self):
@@ -108,14 +120,12 @@ class StackBackend:
         return np.asarray(obs, dtype=float).copy()
 
     def step(self, action):
-        action = np.asarray(action, dtype=float)
-        if action.shape != (4,) or not np.isfinite(action).all():
-            raise ValueError("Expected finite [dx, dy, dz, gripper] command")
-        # RoboVerify's controller assumes 5 cm per clipped Cartesian command;
+        action = bound_delta_action(action)
+        # RoboVerify's controller assumes 5 cm per bounded Cartesian command;
         # Panda's normalized delta controller uses 10 cm. Both use world/root
         # aligned translation here, with a fixed upright robot base.
         command = np.zeros(7, dtype=np.float32)
-        command[:3] = np.clip(action[:3], -1, 1) * 0.5
+        command[:3] = action[:3] * 0.5
         if action[3] > 0.05:
             self.gripper_command = 1.0
         elif action[3] < -0.05:
@@ -211,7 +221,11 @@ class StackBackend:
         )
 
     def render(self, mode="rgb_array"):
-        return self.simulator.render()
+        frame = array(self.simulator.render())
+        # ManiSkill keeps the environment batch dimension even for one Panda.
+        if frame.ndim == 4 and frame.shape[0] == 1:
+            frame = frame[0]
+        return frame
 
     def close(self):
         self.simulator.close()

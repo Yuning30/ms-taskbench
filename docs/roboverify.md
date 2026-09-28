@@ -1,13 +1,9 @@
 # RoboVerify on StackNCube
 
-The current RoboVerify synthesis and verification algorithms are copied into
-`taskbench/roboverify`, with ManiSkill replacing the MuJoCo runtime. The source
-revision and adaptations are recorded in
+Use `solver=program_synthesis` to run RoboVerify synthesis and verification on
+StackNCube. The algorithms are copied into `taskbench/roboverify`, with ManiSkill
+providing the runtime. The source revision and adaptations are recorded in
 [`SOURCE.md`](../taskbench/roboverify/SOURCE.md).
-
-The migration replaces the obsolete `program_synthesis` solver. Both
-`solver=program_synthesis` and `solver=roboverify_stack` now dispatch to the
-current pipeline. Build2D is outside this integration.
 
 ## Setup and demonstrations
 
@@ -16,31 +12,116 @@ uv sync --extra roboverify
 
 uv run --extra roboverify python -m taskbench.roboverify.entry.collect_demos \
   --program taskbench.roboverify.examples.stack:build_program \
-  --num-blocks 3 --seeds 42 --max-loop-iterations 2 \
-  --output-dir data/roboverify/stack3
+  --num-blocks 3 --seeds 0 42 --max-loop-iterations 2 \
+  --output-dir demos/stack3-uniform-control
 ```
 
 The collector executes the supplied relational Stack program with real Panda
 Pick/Move/Release control. It holds the initial TCP for 50 settling steps, then
 records observations, actions, snapshots, instruction boundaries, loop heads,
 normal exits, and symbolic bindings. Accepted demonstrations must pass both
-StackNCube's stable-tower/ungrasped check and RoboVerify's task predicates.
+StackNCube's tower-geometry/ungrasped check and RoboVerify's task predicates.
 Each output directory must be new. Use multiple distinct seeds when collecting
 a training set; failed runs are retained as diagnostics and prevent acceptance
 of the requested batch.
 
-Existing HDF5 demonstrations and RoboVerify MuJoCo NPZ files are not compatible:
-they do not contain this backend's replay state. Recollect them. All integration
-coordinates, offsets, and error bounds are in world-frame metres. The physical
-and formal block length is 0.04 m; there is no coordinate rescaling.
+Fresh RoboVerify Stack resets use **14 cm minimum block-center separation along
+X or Y**: `abs(dx) >= 0.14 OR abs(dy) >= 0.14` for every pair. The bounded sampler
+keeps the original workspace and random cube yaw, with retries confined to each
+seed's own RNG stream. This physical clearance is separate from the symbolic
+Scattered predicate's 8 cm threshold.
+
+StackNCube accepts the final geometry when cube 0 is the lowest cube, adjacent
+cube centers sorted by height are within 33.3 mm horizontally and 40 ± 5 mm
+vertically, and no cube is grasped. The final state is evaluated when the program
+finishes. The `all_static` velocity flag is retained as a diagnostic and does not
+affect acceptance.
+
+All integration coordinates, offsets, and error bounds are in world-frame metres.
+The physical and formal block length is 0.04 m; there is no coordinate rescaling.
+
+The controller bounds Cartesian actions with uniform XYZ scaling, uses a 2 mm
+Pick stopping tolerance, and corrects Release XY drift toward the position
+captured before opening. All primitives use gain 20 and 50-step budgets, with
+gripper latching, actual Panda grasp checks, and held-cube feedback. The 2 mm
+tolerance is an endpoint criterion, not a bound on the entire path.
+
+## Compare controller paths
+
+```bash
+uv run --extra roboverify python -m taskbench.roboverify.experiment.compare_stack_control \
+  --num-blocks 3 4 --seed-start 0 --num-seeds 100
+```
+
+This serial diagnostic compares the previous controller with the updated one
+from matching serialized, settled starts. Restored float32 state is checked at
+absolute tolerance `1e-7`, with the maximum discrepancy recorded. Unexposed
+PhysX contact caches are not included. Both successful and failed seeds remain
+in the report; a newly failing baseline-successful seed produces exit code 2.
+
+Read `runs/stack-control/latest/artifacts/report.md` for the summary,
+`summary.json` for distributions and failures, and `executions.json` for sampled
+paths and physical success checks. `comparison.png` and `comparison.svg` plot the
+distributions. Sampling uses the environment's actual control timestep. Gripper
+opening/closing and turns between motion phases are excluded; Release retains
+the XY reference captured before opening. Carrying-motion errors measure the
+cube against its actual destination, with TCP and attachment drift reported
+separately. These are empirical measurements, not certified tracking bounds.
+
+The diagnostic retains historical behavior only inside its scoped comparison
+context. It does not write demonstration archives or change the shared skills
+in `taskbench/skills/`.
+
+## Compare initial block spacing
+
+```bash
+CUDA_VISIBLE_DEVICES=0 uv run --extra roboverify python -m taskbench.roboverify.experiment.compare_stack_spacing \
+  --num-blocks 4 --separation-cm 14 --seed-start 0 --num-seeds 100 \
+  --output-dir runs/stack-spacing/4b-14cm
+```
+
+This experiment collects with configurable pairwise center separation:
+`abs(dx) >= separation OR abs(dy) >= separation`. The physical clearance is
+independent of the symbolic Scattered predicate. Use the same experiment runner
+at 8 cm for its baseline. Every spacing retains the original workspace, cube
+rotations, controller, settling, and acceptance criteria. Sampling retries use
+each seed's own RNG stream instead of advancing to another requested seed.
+
+Each cohort saves its settings and source hashes, per-seed outcomes, sampling
+effort, and full traces. Sampling failures count toward the failure rate. An
+all-valid cohort also produces `demonstrations.npz`. The experiment uses the
+production sampler, overriding its 14 cm default for each comparison.
+
+The 2026-09-28 sweep used 100 distinct layouts per spacing and block count:
+
+| Minimum center separation along X or Y | 3 blocks | 4 blocks |
+| --- | --- | --- |
+| 8 cm | 90/100 | 84/100 |
+| 10 cm | 98/100 | 95/100 |
+| 12 cm | 100/100 | 98/100 |
+| 14 cm | 100/100 | 100/100 |
+| 16 cm | 100/100 | 100/100 |
+
+At 14 cm, fresh seeds 100–299 also passed 200/200 for each block count, giving
+300/300 distinct layouts per task across the sweep and confirmation. The 14 cm
+setting is now the default for RoboVerify Stack resets. The 16 cm
+condition showed no observed success improvement and required more rejection
+sampling in the fixed workspace. This is empirical collection evidence for
+three and four cubes, not a robot collision-freedom proof.
+
+Results, source hashes, a failure video, and all traces are in
+`runs/stack-spacing-20260928/`. The two fresh-seed all-valid archives are
+`confirmation/3b-14cm/demonstrations.npz` and
+`confirmation/4b-14cm/demonstrations.npz` under that directory.
 
 ## Verify a supplied program first
 
 ```bash
 uv run --extra roboverify python -m taskbench.roboverify.entry.synthesize_cfg \
   --mode verify --program taskbench.roboverify.examples.stack:build_program \
-  --num-blocks 3 --demos data/roboverify/stack3/demonstrations.npz \
+  --num-blocks 3 --demos demos/stack3-uniform-control/demonstrations.npz \
   --max-loop-iterations 2 \
+  --verification-timeout-ms 15000 --motion-timeout-ms 30000 \
   --invariant-relations ON_star Higher Scattered equality \
   --supported-towers --table-surface-height 0 \
   --initial-arm 0 0 0.17
@@ -63,7 +144,7 @@ not copied from the supplied example program.
 ```bash
 uv run --extra roboverify python -m taskbench.roboverify.entry.synthesize_cfg \
   --mode full --synthesis-approach id-first \
-  --num-blocks 3 --demos data/roboverify/stack3/demonstrations.npz \
+  --num-blocks 3 --demos demos/stack3-uniform-control/demonstrations.npz \
   --slots 5 --max-loop-iterations 2 \
   --invariant-relations ON_star Higher Scattered equality \
   --supported-towers --table-surface-height 0 \
@@ -83,8 +164,8 @@ convergence is an experimental outcome, not guaranteed by the migration.
 The equivalent Hydra entry point is:
 
 ```bash
-uv run --extra roboverify python -m taskbench.run solver=roboverify_stack \
-  run.solver_kwargs.demos=data/roboverify/stack3/demonstrations.npz \
+uv run --extra roboverify python -m taskbench.run solver=program_synthesis \
+  run.solver_kwargs.demos=demos/stack3-uniform-control/demonstrations.npz \
   'run.solver_kwargs.initial_arm=[0,0,0.17]'
 ```
 
@@ -127,6 +208,7 @@ from pathlib import Path
 import unittest
 modules = sorted('.'.join(p.with_suffix('').parts)
                  for p in Path('taskbench/roboverify').rglob('test_*.py'))
+modules.append('taskbench.envs.test_stack_n_cube')
 result = unittest.TextTestRunner().run(unittest.defaultTestLoader.loadTestsFromNames(modules))
 raise SystemExit(not result.wasSuccessful())
 PY
@@ -144,3 +226,82 @@ boundary reproduced recorded positions exactly; action replay differed by at
 most 7.3e-6 m and preserved the held object and bindings. A one-iteration MCMC/CEM
 diagnostic ran real simulator evaluations and returned `budget_exhausted`;
 synthesis of a new successful program has not been demonstrated by this check.
+
+Controller-update validation on 2026-09-25 passed **216 tests**, including
+instrumented/uninstrumented Panda rollout parity. Fresh three-cube seeds 0 and
+42 were accepted in `demos/stack3-uniform-control/demonstrations.npz`. A new
+supplied-program run learned from both traces and passed all 12 symbolic checks,
+including the unbounded proof, and all 63 noiseless motion obligations:
+`runs/cfg/20260925-042645-f748f42-uniform-control-verify-longer`. One obligation
+timed out in an earlier run at 3 seconds; the successful run allowed 30 seconds
+per motion obligation and 15 seconds per symbolic check, without changing the
+proof premises. The bounded search diagnostic executed MCMC/CEM and returned
+`budget_exhausted` in `runs/cfg/20260925-042913-f748f42-uniform-control-search-smoke`.
+
+Action replay is still refused when it exceeds the existing `1e-5` tolerance.
+In the new seed-42 trace, the first held-object boundary differed by 11.1 micrometres
+and a later boundary by 49.1 micrometres; these are rejected, not silently accepted.
+Direct snapshot restore at the first held boundary differed by zero for seed 42
+and less than 0.06 micrometres for seed 0. `--reset-mode reset` is the existing
+explicit option for restoring snapshots rather than replaying action prefixes;
+the default and tolerance remain unchanged. Simulator-internal contact caches
+are not captured, so successful replay at one boundary does not establish it
+for every boundary.
+
+The paired comparison completed all **400 executions** (seeds 0–99, two controller
+versions, three and four cubes), using the velocity-based acceptance criterion.
+Results are in
+`runs/stack-control/20260925-042428-f748f42-uniform-release-panda/artifacts/report.md`:
+
+| Measurement | Previous | Updated |
+| --- | ---: | ---: |
+| Three-cube valid programs | 77/100 | 71/100 |
+| Four-cube valid programs | 0/100 | 0/100 |
+| Three-cube transfer path deviation, P95 | 41.50 mm | 8.30 mm |
+| Four-cube transfer path deviation, P95 | 37.72 mm | 8.48 mm |
+| Three-cube Release final XY error, P95 | 4.08 mm | 1.85 mm |
+| Four-cube Release final XY error, P95 | 3.94 mm | 1.84 mm |
+
+All 18 newly failing baseline-successful three-cube seeds failed only the final
+`all_static` check: tower geometry and release checks passed. Twelve other seeds
+recovered, giving the net decrease of six successes. Diagnostic holds at seeds
+9, 10 and 15 reached physical success after one additional control step, but
+these holds were not added to production or counted as paired-run successes.
+Four-cube seeds 0 and 42 remained non-static after 20 diagnostic hold steps.
+The detailed probes are in `settling-diagnosis.json` beside the report.
+
+Under that criterion, the controller update improved direct-motion agreement
+without improving overall task success. Peak Release sideways deviation was
+largely unchanged (three-cube P95 4.63 to 4.69 mm). Some runs also failed primitive or loop budgets; failed and
+partial executions remain in the report. Endpoint and path distributions include
+all observed phases, not just successful programs. No seeds were filtered or
+replaced; the sampler used in that experiment could map multiple requested seeds to
+the same accepted layout. Those controller-only measurements retained the
+velocity-based success criterion, collision masks, replay tolerance, and
+instruction budgets.
+
+## Collection with geometry and release acceptance
+
+Fresh collection on 2026-09-25 ran all requested seeds 0–99 for each block count
+with velocity flags used only as diagnostics. The reference program, controller,
+50-step primitive budgets, and 50 initial settling steps were unchanged. Three
+cubes used two loop iterations, and four cubes used three, with a 60-second
+trajectory timeout.
+
+| Cubes | Accepted demonstrations | Remaining failures |
+| --- | ---: | --- |
+| 3 | 96/100 (96%) | 3 loop-limit failures, 1 Pick descent failure |
+| 4 | 85/100 (85%) | 9 loop-limit failures, 5 Pick descent failures, 1 Move failure |
+
+Reapplying the velocity thresholds to these same recorded final states would
+accept 61/100 and 2/100, respectively. These are fresh collection runs; the earlier
+paired controller comparison restored saved starts. The reset sampler produced
+66 distinct recorded starting layouts for three cubes and 44 for four cubes.
+The reported rates include every requested seed.
+
+The full report, source hashes, and per-seed measurements are in
+`runs/stack-geometry-acceptance-20260925/`. The collections are in
+`demos/stack3-geometry-acceptance-20260925/` and
+`demos/stack4-geometry-acceptance-20260925/`. Both batches contain failures, so their
+`diagnostics/` directories retain all 100 individual traces instead of a single
+accepted-batch archive. All 10 targeted acceptance/backend tests passed.

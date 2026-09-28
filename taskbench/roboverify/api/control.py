@@ -10,6 +10,8 @@ from math import isfinite
 
 import numpy as np
 
+from taskbench.roboverify.util.actions import bound_delta_action
+
 
 @dataclass(frozen=True)
 class ControlConfig:
@@ -27,7 +29,7 @@ class ControlConfig:
 
 
 DEFAULT_CONTROL = ControlConfig()
-DEFAULT_PICK_CONTROL = ControlConfig(position_tolerance=0.01)
+DEFAULT_PICK_CONTROL = ControlConfig(position_tolerance=0.002)
 
 
 @dataclass(frozen=True)
@@ -43,9 +45,9 @@ class ControlResult:
 def get_move_action(
     observation, target_position, *, gain=DEFAULT_CONTROL.gain, close_gripper=False
 ):
-    """Proportional Cartesian command; the caller owns the stopping condition."""
+    """Direction-preserving bounded XYZ command, with independent gripper control."""
     action = gain * (np.asarray(target_position) - np.asarray(observation)[:3])
-    return np.r_[action, -0.2 if close_gripper else 0.0]
+    return bound_delta_action(np.r_[action, -0.2 if close_gripper else 0.0])
 
 
 class PrimitiveController:
@@ -116,15 +118,16 @@ class PrimitiveController:
             observation = self.observation.copy()
             if payload_id is not None:
                 observation[:3] = self.box_position(payload_id)
-            command = get_move_action(
+            command_target = target.copy()
+            if vertical_only:
+                # Ignore unused axes before scaling, using the tracked position.
+                command_target[:2] = observation[:2]
+            return get_move_action(
                 observation,
-                target,
+                command_target,
                 gain=self.control.gain,
                 close_gripper=close_gripper,
             )
-            if vertical_only:
-                command[:2] = 0.0
-            return command
 
         return self._until(
             phase, lambda: error() <= self.control.position_tolerance, action, error
@@ -174,10 +177,9 @@ class PrimitiveController:
         return self.move(target, payload_id=getattr(self.env, "held_box_id", None))
 
     def release(self, box_id, offset):
+        # Freeze XY before opening; retreat feedback corrects opening/tracking drift.
         target = self.observation[:3].copy()
         target[2] = self.box_position(box_id)[2] + offset
         if not self.gripper(opened=True):
             return False
-        return self.move(
-            target, close_gripper=False, vertical_only=True, phase="retreat"
-        )
+        return self.move(target, close_gripper=False, phase="retreat")

@@ -4,7 +4,6 @@ from taskbench.solver import BaseSolver, SolverResult, register_solver
 
 
 @register_solver("program_synthesis")
-@register_solver("roboverify_stack")
 class ProgramSynthesisSolver(BaseSolver):
     """Run search and both proof stages; successful rollouts alone cannot pass."""
 
@@ -17,11 +16,10 @@ class ProgramSynthesisSolver(BaseSolver):
     def solve(self, env=None, seed=None, cfg=None):
         if not self.demos:
             raise ValueError(
-                "A current ManiSkill archive is required. Collect with "
+                "A ManiSkill demonstration archive is required. Collect with "
                 "uv run --extra roboverify python -m taskbench.roboverify.entry.collect_demos "
                 "--program taskbench.roboverify.examples.stack:build_program; "
-                "then set run.solver_kwargs.demos=<collection>/demonstrations.npz. "
-                "Old HDF5 demos do not include replayable simulator state."
+                "then set run.solver_kwargs.demos=<collection>/demonstrations.npz."
             )
         try:
             from taskbench.roboverify.entry.synthesize_cfg import main

@@ -24,7 +24,7 @@ def build_program(context, *, num_blocks):
         ),
     )
     # Keep transport above the tower without the former 20 cm excursion.
-    # Pick uses 10 mm; Move/Release use 2 mm. Each retains its 50-step budget.
+    # Pick/Move/Release use 2 mm. Each retains its 50-step budget.
     body = [
         PickByName("b_prime"),
         MoveByName("b_prime", "b_prime", "b", target_offset=[0, 0, TRANSFER_HEIGHT]),

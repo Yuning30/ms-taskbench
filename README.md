@@ -46,9 +46,9 @@ uv run python -m taskbench.programs.build2d_demo --rows 3 --cols 4
 
 ### StackNCube
 
-**RoboVerify synthesis and verification:** the current pipeline is now copied into
-this repository and connected to ManiSkill StackNCube. See the
-[Stack synthesis/verification guide](docs/roboverify.md) for collecting compatible
+**RoboVerify synthesis and verification:** use `solver=program_synthesis` to run
+the pipeline on ManiSkill StackNCube. See the
+[Stack synthesis/verification guide](docs/roboverify.md) for collecting
 demonstrations, verifying a supplied program, and running full synthesis.
 Install its optional dependencies with `uv sync --extra roboverify`.
 
