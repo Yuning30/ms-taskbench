@@ -1,374 +1,337 @@
 # RoboVerify on StackNCube
 
-Use `solver=program_synthesis` to run RoboVerify synthesis and verification on
-StackNCube. The algorithms are copied into `taskbench/roboverify`, with ManiSkill
-providing the runtime. The source revision and adaptations are recorded in
-[`SOURCE.md`](../taskbench/roboverify/SOURCE.md).
+Use `solver=program_synthesis` for Stack synthesis and verification.
+The algorithms are copied into `taskbench/roboverify`, with ManiSkill providing
+the physical runtime. The package is self-contained; see
+[source provenance](../taskbench/roboverify/SOURCE.md).
 
-## Setup and demonstrations
+The current default is **delta control with 14 cm initial block separation**.
+Planner motion is selectable, but a numerical mplib termination issue still
+causes abrupt failures on some seeds. The matched 100-seed evaluation accepted
+100/100 delta runs for both three and four blocks, versus 92/100 and 90/100 with
+planner motion. See [dated validation results](roboverify-validation.md).
+
+## Setup and demonstration collection
 
 ```bash
 uv sync --extra roboverify
+```
 
+Collect three-block demonstrations and videos:
+
+```bash
 uv run --extra roboverify python -m taskbench.roboverify.entry.collect_demos \
   --program taskbench.roboverify.examples.stack:build_program \
   --num-blocks 3 --seeds 0 42 --max-loop-iterations 2 \
-  --output-dir demos/stack3-uniform-control
+  --move-controller delta --save-video --output-dir demos/stack3-delta
 ```
 
-The collector executes the supplied relational Stack program with real Panda
-Pick/Move/Release control. It holds the initial TCP for 50 settling steps, then
-records observations, actions, snapshots, instruction boundaries, loop heads,
-normal exits, and symbolic bindings. Accepted demonstrations must pass both
-StackNCube's tower-geometry/ungrasped check and RoboVerify's task predicates.
-Each output directory must be new. Use multiple distinct seeds when collecting
-a training set; failed runs are retained as diagnostics and prevent acceptance
-of the requested batch.
+For four blocks:
 
-Fresh RoboVerify Stack resets use **14 cm minimum block-center separation along
-X or Y**: `abs(dx) >= 0.14 OR abs(dy) >= 0.14` for every pair. The bounded sampler
-keeps the original workspace and random cube yaw, with retries confined to each
-seed's own RNG stream. This physical clearance is separate from the symbolic
-Scattered predicate's 8 cm threshold.
+```bash
+uv run --extra roboverify python -m taskbench.roboverify.entry.collect_demos \
+  --program taskbench.roboverify.examples.stack:build_program \
+  --num-blocks 4 --seeds 0 42 --max-loop-iterations 3 \
+  --move-controller delta --save-video --output-dir demos/stack4-delta
+```
 
-StackNCube accepts the final geometry when cube 0 is the lowest cube, adjacent
-cube centers sorted by height are within 33.3 mm horizontally and 40 ± 5 mm
-vertically, and no cube is grasped. The final state is evaluated when the program
-finishes. The `all_static` velocity flag is retained as a diagnostic and does not
-affect acceptance.
+Use a new output directory on every run. Replace `--seeds 0 42` with
+`--seed-start 0 --num-trajectories 100` for a consecutive 100-seed batch.
+Collection defaults to a 60-second wall-clock limit per trajectory.
+On a machine where rendering needs a particular GPU, prefix the command with
+`CUDA_VISIBLE_DEVICES=0`.
 
-All integration coordinates, offsets, and error bounds are in world-frame metres.
-The physical and formal block length is 0.04 m; there is no coordinate rescaling.
+The supplied relational program starts with cube 0 as the base. Each iteration
+chooses another clear block, executes Pick, lifts it, translates above the
+current tower, lowers it onto the tower, and executes Release. RoboVerify Pick
+closes onto the block; lifting is a separate Move. Moves track the held cube's
+center. Release opens the gripper and retreats with a fixed XY reference.
 
-The default delta controller bounds Cartesian actions with uniform XYZ scaling, uses a 2 mm
-Pick stopping tolerance, and corrects Release XY drift toward the position
-captured before opening. All primitives use gain 20 and 50-step budgets, with
-gripper latching, actual Panda grasp checks, and held-cube feedback. The 2 mm
-tolerance is an endpoint criterion, not a bound on the entire path.
+The collector holds the initial TCP for 50 settling steps before recording.
+It stores observations, low-level actions, full exposed simulator snapshots,
+instruction boundaries, loop heads/exits, and symbolic bindings.
+
+If every requested trace is valid, the batch produces `demonstrations.npz`.
+Otherwise it reports `invalid_demonstrations` and retains all available
+per-seed traces, including successes, in `diagnostics/`. Inspect
+`collection.json` for outcomes and media errors. Optional 20 FPS videos are
+written to `videos/seed_NNNN.mp4`.
+See [recording and replay](demos.md) for the archive format.
+
+## Initialization and acceptance
+
+The backend uses Panda, one CPU environment, zero robot joint initialization
+noise, and uniform 40 mm cubes. Coordinates, offsets, and error bounds use
+world-frame metres.
+
+RoboVerify resets require **14 cm minimum block-center separation along X or Y**:
+
+```text
+abs(dx) >= 0.14 OR abs(dy) >= 0.14    for every pair of cubes
+```
+
+The bounded sampler retains X = [−0.1, 0.1] m, Y = [−0.2, 0.2] m and random
+cube yaw. Retries stay within each seed's own RNG stream; they do not advance to
+another seed. This physical clearance is separate from the symbolic
+`Scattered` predicate's 8 cm threshold. The raw Stack environment used by
+shared-skill solvers has its own smaller-clearance reset.
+
+A demonstration is accepted when execution completes within its budgets and
+passes both the symbolic task pre/postconditions and StackNCube success:
+
+- Cube 0 is the lowest cube.
+- Adjacent centers sorted by height differ horizontally by at most about
+  33.3 mm and vertically by 40 ± 5 mm.
+- No cube is grasped.
+
+The final state is evaluated when the program finishes. Linear/angular velocity
+does not affect acceptance; `all_static` is retained as a diagnostic.
+There is no requirement to maintain the final conditions for a duration.
+Initial settling and the primitive's physical actions are separate from a
+final stability window.
 
 ## Choose the move controller
 
-Set `--move-controller delta` (the default) or `--move-controller planner` for
-collection and the standalone synthesis/verification CLI. With Hydra, set
-`run.solver_kwargs.move_controller=delta` or `planner`. This selects the motion
-implementation inside Pick, Move, and Release; the program's operands, offsets,
-14 cm reset spacing, and task acceptance criteria stay the same.
+Use `--move-controller delta|planner` in collection and the standalone CLI.
+With Hydra, use `run.solver_kwargs.move_controller=delta|planner`.
+This selects motion inside all three RoboVerify primitives: Pick, Move, Release.
 
-For planner demonstrations:
+| Setting | Delta (default) | Planner |
+| --- | --- | --- |
+| ManiSkill control mode | `pd_ee_delta_pose` | `pd_joint_pos` |
+| Motion | Position feedback, gain 20 | mplib `plan_screw()`, fixed TCP orientation per motion |
+| Default primitive budget | 50 control steps from the DSL | 200 control steps, including gripper phases |
+| Position stopping tolerance | 2 mm | 2 mm measured after executing the plan |
+| Recorded action | XYZ delta and gripper | Seven joint positions and gripper |
+
+Delta uniformly scales XYZ when bounding Cartesian commands, preserving their
+direction; the gripper command is bounded independently. Carrying moves use
+actual held-cube feedback. Release captures its XY reference before opening
+and corrects lateral drift during retreat. The 2 mm criterion applies to the
+endpoint, not the entire physical path.
+
+Planner mode plans straight translation at fixed TCP orientation and accounts
+for the measured cube-to-TCP offset when carrying. It checks measured endpoint
+convergence and that the carried cube remains grasped. Planning uses a 0.01 rad
+joint integration step, with one retry at 0.005 rad from the same start to the
+same destination. It executes at the simulator's normal control timestep.
+
+Table and self-collision checks remain enabled, with only the fixed Panda base's
+mounting contact with the table allowed. Loose cubes, the tower, and the held
+payload are not registered as planner collision geometry. A rejected plan ends
+the primitive; there is no delta fallback or detour search.
+
+**Current planner limitation:** on the 18 failed trials in the broader
+evaluation, mplib rejected a tiny final integration increment at both
+resolutions, even though collision and joint-limit checks passed. The runtime
+therefore stopped before starting the newly planned motion. The integration
+does not yet fix this numerical termination rule.
+
+Collect planner demonstrations with:
 
 ```bash
-CUDA_VISIBLE_DEVICES=0 uv run --extra roboverify python -m taskbench.roboverify.entry.collect_demos \
+uv run --extra roboverify python -m taskbench.roboverify.entry.collect_demos \
   --program taskbench.roboverify.examples.stack:build_program \
   --num-blocks 3 --seeds 0 42 --max-loop-iterations 2 \
-  --move-controller planner --output-dir demos/stack3-planner
+  --move-controller planner --planner-step-limit 200 \
+  --save-video --output-dir demos/stack3-planner
 ```
 
-Then use the same controller for synthesis:
+Use the same settings when synthesizing:
 
 ```bash
-CUDA_VISIBLE_DEVICES=0 uv run --extra roboverify python -m taskbench.run \
-  solver=program_synthesis \
+uv run --extra roboverify python -m taskbench.run solver=program_synthesis \
+  run.solver_kwargs.num_blocks=3 \
   run.solver_kwargs.move_controller=planner \
+  run.solver_kwargs.planner_step_limit=200 \
   run.solver_kwargs.demos=demos/stack3-planner/demonstrations.npz \
   'run.solver_kwargs.initial_arm=[0,0,0.17]'
 ```
 
-Planner mode uses the shared mplib `plan_screw()` helper with `pd_joint_pos`.
-Each motion keeps the current TCP orientation and plans straight translation.
-Held-cube destinations account for the measured cube-to-TCP offset. Execution
-still requires the measured TCP/cube endpoint to reach the 2 mm tolerance and
-checks that a carried cube remains grasped. A planning failure stops the
-primitive without switching controllers or searching for a detour.
+Archives record controller and planner budget; synthesis rejects mismatched
+settings and uses the selected backend for candidate execution and action
+replay. This solver owns its environments, so `env.control_mode` does not
+select its controller.
 
-Planner primitives use `--planner-step-limit 200` by default, including gripper
-phases, instead of the DSL's delta step budget. Adjust it through
-`run.solver_kwargs.planner_step_limit` in Hydra. The planner uses a 0.01 rad joint
-integration step for numerical accuracy, retrying once at 0.005 rad if planning
-fails, and executes at the normal simulator control timestep. Both attempts use
-the same start and destination. It retains table and self-collision checks, allowing only the
-fixed Panda base's mounting contact with the table. Loose cubes, the tower, and
-the carried cube are not registered as planner collision geometry.
-
-Archives record the selected controller and planner budget. Synthesis checks
-these settings and uses them for candidate execution and joint-action replay.
-Set controller selection under `run.solver_kwargs`; this solver owns its
-environment, so `env.control_mode` does not choose its controller.
-
-## Compare controller paths
-
-```bash
-uv run --extra roboverify python -m taskbench.roboverify.experiment.compare_stack_control \
-  --num-blocks 3 4 --seed-start 0 --num-seeds 100
-```
-
-This serial diagnostic compares the previous controller with the updated one
-from matching serialized, settled starts. Restored float32 state is checked at
-absolute tolerance `1e-7`, with the maximum discrepancy recorded. Unexposed
-PhysX contact caches are not included. Both successful and failed seeds remain
-in the report; a newly failing baseline-successful seed produces exit code 2.
-
-Read `runs/stack-control/latest/artifacts/report.md` for the summary,
-`summary.json` for distributions and failures, and `executions.json` for sampled
-paths and physical success checks. `comparison.png` and `comparison.svg` plot the
-distributions. Sampling uses the environment's actual control timestep. Gripper
-opening/closing and turns between motion phases are excluded; Release retains
-the XY reference captured before opening. Carrying-motion errors measure the
-cube against its actual destination, with TCP and attachment drift reported
-separately. These are empirical measurements, not certified tracking bounds.
-
-The diagnostic retains historical behavior only inside its scoped comparison
-context. It does not write demonstration archives or change the shared skills
-in `taskbench/skills/`.
-
-## Compare initial block spacing
-
-```bash
-CUDA_VISIBLE_DEVICES=0 uv run --extra roboverify python -m taskbench.roboverify.experiment.compare_stack_spacing \
-  --num-blocks 4 --separation-cm 14 --seed-start 0 --num-seeds 100 \
-  --output-dir runs/stack-spacing/4b-14cm
-```
-
-This experiment collects with configurable pairwise center separation:
-`abs(dx) >= separation OR abs(dy) >= separation`. The physical clearance is
-independent of the symbolic Scattered predicate. Use the same experiment runner
-at 8 cm for its baseline. Every spacing retains the original workspace, cube
-rotations, controller, settling, and acceptance criteria. Sampling retries use
-each seed's own RNG stream instead of advancing to another requested seed.
-
-Each cohort saves its settings and source hashes, per-seed outcomes, sampling
-effort, and full traces. Sampling failures count toward the failure rate. An
-all-valid cohort also produces `demonstrations.npz`. The experiment uses the
-production sampler, overriding its 14 cm default for each comparison.
-
-The 2026-09-28 sweep used 100 distinct layouts per spacing and block count:
-
-| Minimum center separation along X or Y | 3 blocks | 4 blocks |
-| --- | --- | --- |
-| 8 cm | 90/100 | 84/100 |
-| 10 cm | 98/100 | 95/100 |
-| 12 cm | 100/100 | 98/100 |
-| 14 cm | 100/100 | 100/100 |
-| 16 cm | 100/100 | 100/100 |
-
-At 14 cm, fresh seeds 100–299 also passed 200/200 for each block count, giving
-300/300 distinct layouts per task across the sweep and confirmation. The 14 cm
-setting is now the default for RoboVerify Stack resets. The 16 cm
-condition showed no observed success improvement and required more rejection
-sampling in the fixed workspace. This is empirical collection evidence for
-three and four cubes, not a robot collision-freedom proof.
-
-Results, source hashes, a failure video, and all traces are in
-`runs/stack-spacing-20260928/`. The two fresh-seed all-valid archives are
-`confirmation/3b-14cm/demonstrations.npz` and
-`confirmation/4b-14cm/demonstrations.npz` under that directory.
-
-## Verify a supplied program first
+## Verify a supplied program
 
 ```bash
 uv run --extra roboverify python -m taskbench.roboverify.entry.synthesize_cfg \
   --mode verify --program taskbench.roboverify.examples.stack:build_program \
-  --num-blocks 3 --demos demos/stack3-uniform-control/demonstrations.npz \
-  --max-loop-iterations 2 \
+  --num-blocks 3 --demos demos/stack3-delta/demonstrations.npz \
+  --move-controller delta --max-loop-iterations 2 \
   --verification-timeout-ms 15000 --motion-timeout-ms 30000 \
   --invariant-relations ON_star Higher Scattered equality \
   --supported-towers --table-surface-height 0 \
   --initial-arm 0 0 0.17
 ```
 
-`--initial-arm` is an explicit geometric proof premise. The example uses a
-nominal Panda reset TCP, not an automatic assertion about every physical reset.
-The exact recorded TCP can be read from the first three values of a trace's
-initial state. The migration validation used that recorded value. The runtime
-always restores the complete saved start for each candidate rather than
-regenerating a scene from its seed.
+Verify mode skips initial program search, executes the supplied candidate,
+learns invariants with RoboVerify's partition-based `InvInference`, and checks
+symbolic and motion obligations. It does not copy invariants from the example
+program.
 
-This mode skips initial search, then executes the supplied candidate, learns
-loop invariants from that execution, and checks symbolic and motion obligations.
-The learner is RoboVerify's partition-based `InvInference` path. Invariants are
-not copied from the supplied example program.
+With Hydra, set `run.solver_kwargs.mode=verify` and add
+`+run.solver_kwargs.program=taskbench.roboverify.examples.stack:build_program`
+to the synthesis command below. Options absent from the YAML, such as
+`verification_timeout_ms`, also need the `+` prefix.
+
+### Initial arm premise
+
+`--initial-arm 0 0 0.17`, or
+`'run.solver_kwargs.initial_arm=[0,0,0.17]'`, constrains the initial TCP position
+in the geometric verification model. It does not move the robot, initialize its
+joints, or replace the recorded physical start. Omitting it leaves that initial
+model position unconstrained; it is not automatically inferred.
+
+The example is a nominal Panda reset TCP. Inspect the exact recorded initial
+positions when deciding what premise a dataset supports:
+
+```python
+from taskbench.roboverify.cfg.recordings import load_traces
+
+for trace in load_traces("demos/stack3-delta/demonstrations.npz", require_valid=True):
+    print(trace.seed, trace.states[0][:3])
+```
+
+A nominal rounded position is a model assumption, not proof that every physical
+reset has exactly those coordinates. Candidate execution restores recorded
+simulation starts, independently of this symbolic premise.
 
 ## Synthesize and verify
 
 ```bash
+uv run --extra roboverify python -m taskbench.run solver=program_synthesis \
+  run.solver_kwargs.mode=full \
+  run.solver_kwargs.num_blocks=3 \
+  run.solver_kwargs.move_controller=delta \
+  run.solver_kwargs.demos=demos/stack3-delta/demonstrations.npz \
+  'run.solver_kwargs.initial_arm=[0,0,0.17]'
+```
+
+For four blocks, set `run.solver_kwargs.num_blocks=4` and
+`run.solver_kwargs.demos=demos/stack4-delta/demonstrations.npz`.
+Root `env.num_cubes` does not configure this solver.
+
+The Hydra defaults select ID-first search, five slots, 20 search iterations,
+five refinements, supported-tower geometry, and a table surface at Z = 0.
+ID-first search mutates numeric primitives and optimizes offsets with CEM,
+refines the CFG, recovers repeated flat-loop structure, and searches named loop
+bodies. Candidates must pass execution, invariant learning, and both proof
+stages.
+
+The standalone CLI exposes the full configuration:
+
+```bash
 uv run --extra roboverify python -m taskbench.roboverify.entry.synthesize_cfg \
-  --mode full --synthesis-approach id-first \
-  --num-blocks 3 --demos demos/stack3-uniform-control/demonstrations.npz \
-  --slots 5 --max-loop-iterations 2 \
+  --mode full --synthesis-approach id-first --slots 5 \
+  --num-blocks 3 --demos demos/stack3-delta/demonstrations.npz \
+  --move-controller delta \
   --invariant-relations ON_star Higher Scattered equality \
   --supported-towers --table-surface-height 0 \
   --initial-arm 0 0 0.17
 ```
 
-ID-first search mutates numeric primitives and optimizes their offsets with CEM,
-refines the CFG, recovers repeated flat-loop structure, then searches named loop
-bodies. Every resulting candidate must pass fresh execution, invariant learning,
-and both verification stages. `--synthesis-approach relational --quotient` retains
-RoboVerify's alternative of introducing relational names earlier in search.
+Its unqualified defaults differ from Hydra, including relational search,
+four slots, and no supported-tower premise. Specify these flags when using the
+ID-first workflow above. `--synthesis-approach relational --quotient` selects
+the alternative that introduces relational names earlier.
 
-For a bounded diagnostic run, add `--smoke`. A small budget may finish with
-`budget_exhausted`; that is not a synthesized or verified solution. Full synthesis
-convergence is an experimental outcome, not guaranteed by the migration.
+The standalone CLI defaults to seed 0. The Hydra runner passes
+`cfg.seed + episode_number`, so its first run uses 43 with the default
+`seed=42`. Use `+run.solver_kwargs.seed=0` to explicitly match CLI seed 0.
 
-The equivalent Hydra entry point is:
+For a bounded diagnostic run, add `--smoke` or
+`run.solver_kwargs.smoke=true`. A `budget_exhausted` result is not a
+synthesized/verified solution. Supplied-program verification has passed;
+the recorded bounded search checks have exercised real rollouts without
+demonstrating synthesis of a new successful program.
 
-```bash
-uv run --extra roboverify python -m taskbench.run solver=program_synthesis \
-  run.solver_kwargs.demos=demos/stack3-uniform-control/demonstrations.npz \
-  'run.solver_kwargs.initial_arm=[0,0,0.17]'
-```
-
-Synthesis owns its environments; this solver does not create an extra episode
-environment. The runner preserves the formal result instead of overwriting it
-with a simulator success flag. The standalone CLI exposes the full search and
-verification configuration and returns a nonzero exit code on failure.
-
-## Results and proof scope
+## Results, replay, and proof scope
 
 ```bash
 uv run --extra roboverify python -m taskbench.roboverify.experiment.report \
   --run runs/cfg/latest
 ```
 
-Run artifacts include configuration, the CFG, candidate programs and traces,
-learned invariants, individual symbolic and motion obligations, and the final
-result. `verified_model` requires both proof stages. A failed, unknown, vacuous,
-unsupported, or budget-exhausted check cannot become verification success.
+Run artifacts include configuration, CFGs, candidate programs/traces, learned
+invariants, individual obligations, and the final result. `verified_model`
+requires both proof stages. Failure, unknown, vacuity, unsupported checks, and
+budget exhaustion cannot become verification success. The standalone synthesis
+CLI returns a nonzero exit code on failure; the Hydra runner preserves the
+formal result in `SolverResult.verification_status`.
 
 The symbolic stage performs finite checks followed by an unbounded proof.
-Motion checks use idealized waypoint motion, supported-tower geometry, and
-explicit primitive contracts. They do not prove robot-arm collision freedom,
-Panda controller refinement, grasp reliability, or total termination. Successful
-physical demonstrations are validation evidence, separate from those proofs.
+Motion checks use idealized waypoints, supported-tower geometry, and explicit
+primitive contracts. They establish partial correctness under those premises;
+they do not prove robot-arm collision freedom, physical controller refinement,
+grasp reliability, or total termination. This scope also applies to planner
+motion.
 
-The adapter currently supports 2–6 uniform cubes, Panda, CPU simulation, and
-`pd_ee_delta_pose` or planner-driven `pd_joint_pos`. Runtime data are still subject to the copied predicate
-assumptions, including scattered initial cubes and a shared height tolerance.
-The snapshot API does not expose all internal PhysX caches, so replay is checked
-numerically and refused if it differs by more than 1e-5 m in recorded features.
+The adapter supports 2–6 uniform cubes, Panda, and CPU simulation; the broad
+collection studies cover three and four cubes. Traces must agree on task,
+block geometry, and predicate tolerances as well as controller settings.
+The default `Higher` tolerance is 0.001 m.
+
+Replay restores a saved start and executes an action prefix. It rejects
+recorded-feature discrepancies above `1e-5`. `--reset-mode reset` instead
+restores a boundary snapshot directly. Hidden PhysX contact caches are not
+serialized, so successful replay is checked numerically. See
+[NPZ replay details](demos.md#replay-during-synthesis).
+
+## Experiment tools
+
+Compare initial spacing with the delta controller:
+
+```bash
+uv run --extra roboverify python -m taskbench.roboverify.experiment.compare_stack_spacing \
+  --num-blocks 4 --separation-cm 14 --seed-start 0 --num-seeds 100 \
+  --output-dir runs/stack-spacing/4b-14cm
+```
+
+This uses the production sampler with a spacing override and records settings,
+source hashes, all outcomes, sampling effort, and full traces. An all-valid
+cohort also writes `demonstrations.npz`. The 14 cm sweep and fresh-seed
+confirmation accepted 300/300 distinct layouts for each block count.
+
+Compare the previous and updated **delta** controller implementations:
+
+```bash
+uv run --extra roboverify python -m taskbench.roboverify.experiment.compare_stack_control \
+  --num-blocks 3 4 --seed-start 0 --num-seeds 100
+```
+
+This tool compares uniform scaling and Release feedback from matching serialized
+settled starts; it is not a delta-versus-planner comparison. It checks restored
+float32 state at tolerance `1e-7`, retains failures, and reports empirical
+path/endpoint errors. Hidden PhysX caches are excluded. A newly failing
+baseline-successful seed causes exit code 2.
+
+Outputs under `runs/stack-control/latest/artifacts/` include `report.md`,
+`summary.json`, `executions.json`, and PNG/SVG plots. Historical experiments
+used different acceptance and reset settings; see
+[validation history](roboverify-validation.md) when interpreting their rates.
 
 ## Tests
-
-The copied core tests and the additional adapter-contract tests use `unittest`:
 
 ```bash
 uv run --extra roboverify python - <<'PY'
 from pathlib import Path
 import unittest
-modules = sorted('.'.join(p.with_suffix('').parts)
-                 for p in Path('taskbench/roboverify').rglob('test_*.py'))
-modules.append('taskbench.envs.test_stack_n_cube')
-result = unittest.TextTestRunner().run(unittest.defaultTestLoader.loadTestsFromNames(modules))
+
+modules = sorted(
+    ".".join(p.with_suffix("").parts)
+    for p in Path("taskbench/roboverify").rglob("test_*.py")
+)
+modules.append("taskbench.envs.test_stack_n_cube")
+result = unittest.TextTestRunner().run(
+    unittest.defaultTestLoader.loadTestsFromNames(modules)
+)
 raise SystemExit(not result.wasSuccessful())
 PY
 ```
 
-Simulator-backed validation should additionally collect a fresh demonstration,
-restore/replay a boundary while a cube is held, run supplied-program verification,
-and exercise bounded full search. Unit tests alone do not establish these results.
-
-Migration validation on 2026-09-24 passed all 193 tests. A three-cube, seed-42
-ManiSkill collection was accepted. Supplied-program verification learned from
-fresh candidate execution and passed 12 symbolic checks (finite sizes and the
-unbounded proof), plus all 63 noiseless motion obligations. Restoring a held-cube
-boundary reproduced recorded positions exactly; action replay differed by at
-most 7.3e-6 m and preserved the held object and bindings. A one-iteration MCMC/CEM
-diagnostic ran real simulator evaluations and returned `budget_exhausted`;
-synthesis of a new successful program has not been demonstrated by this check.
-
-Controller-update validation on 2026-09-25 passed **216 tests**, including
-instrumented/uninstrumented Panda rollout parity. Fresh three-cube seeds 0 and
-42 were accepted in `demos/stack3-uniform-control/demonstrations.npz`. A new
-supplied-program run learned from both traces and passed all 12 symbolic checks,
-including the unbounded proof, and all 63 noiseless motion obligations:
-`runs/cfg/20260925-042645-f748f42-uniform-control-verify-longer`. One obligation
-timed out in an earlier run at 3 seconds; the successful run allowed 30 seconds
-per motion obligation and 15 seconds per symbolic check, without changing the
-proof premises. The bounded search diagnostic executed MCMC/CEM and returned
-`budget_exhausted` in `runs/cfg/20260925-042913-f748f42-uniform-control-search-smoke`.
-
-Action replay is still refused when it exceeds the existing `1e-5` tolerance.
-In the new seed-42 trace, the first held-object boundary differed by 11.1 micrometres
-and a later boundary by 49.1 micrometres; these are rejected, not silently accepted.
-Direct snapshot restore at the first held boundary differed by zero for seed 42
-and less than 0.06 micrometres for seed 0. `--reset-mode reset` is the existing
-explicit option for restoring snapshots rather than replaying action prefixes;
-the default and tolerance remain unchanged. Simulator-internal contact caches
-are not captured, so successful replay at one boundary does not establish it
-for every boundary.
-
-The paired comparison completed all **400 executions** (seeds 0–99, two controller
-versions, three and four cubes), using the velocity-based acceptance criterion.
-Results are in
-`runs/stack-control/20260925-042428-f748f42-uniform-release-panda/artifacts/report.md`:
-
-| Measurement | Previous | Updated |
-| --- | ---: | ---: |
-| Three-cube valid programs | 77/100 | 71/100 |
-| Four-cube valid programs | 0/100 | 0/100 |
-| Three-cube transfer path deviation, P95 | 41.50 mm | 8.30 mm |
-| Four-cube transfer path deviation, P95 | 37.72 mm | 8.48 mm |
-| Three-cube Release final XY error, P95 | 4.08 mm | 1.85 mm |
-| Four-cube Release final XY error, P95 | 3.94 mm | 1.84 mm |
-
-All 18 newly failing baseline-successful three-cube seeds failed only the final
-`all_static` check: tower geometry and release checks passed. Twelve other seeds
-recovered, giving the net decrease of six successes. Diagnostic holds at seeds
-9, 10 and 15 reached physical success after one additional control step, but
-these holds were not added to production or counted as paired-run successes.
-Four-cube seeds 0 and 42 remained non-static after 20 diagnostic hold steps.
-The detailed probes are in `settling-diagnosis.json` beside the report.
-
-Under that criterion, the controller update improved direct-motion agreement
-without improving overall task success. Peak Release sideways deviation was
-largely unchanged (three-cube P95 4.63 to 4.69 mm). Some runs also failed primitive or loop budgets; failed and
-partial executions remain in the report. Endpoint and path distributions include
-all observed phases, not just successful programs. No seeds were filtered or
-replaced; the sampler used in that experiment could map multiple requested seeds to
-the same accepted layout. Those controller-only measurements retained the
-velocity-based success criterion, collision masks, replay tolerance, and
-instruction budgets.
-
-## Collection with geometry and release acceptance
-
-Fresh collection on 2026-09-25 ran all requested seeds 0–99 for each block count
-with velocity flags used only as diagnostics. The reference program, controller,
-50-step primitive budgets, and 50 initial settling steps were unchanged. Three
-cubes used two loop iterations, and four cubes used three, with a 60-second
-trajectory timeout.
-
-| Cubes | Accepted demonstrations | Remaining failures |
-| --- | ---: | --- |
-| 3 | 96/100 (96%) | 3 loop-limit failures, 1 Pick descent failure |
-| 4 | 85/100 (85%) | 9 loop-limit failures, 5 Pick descent failures, 1 Move failure |
-
-Reapplying the velocity thresholds to these same recorded final states would
-accept 61/100 and 2/100, respectively. These are fresh collection runs; the earlier
-paired controller comparison restored saved starts. The reset sampler produced
-66 distinct recorded starting layouts for three cubes and 44 for four cubes.
-The reported rates include every requested seed.
-
-The full report, source hashes, and per-seed measurements are in
-`runs/stack-geometry-acceptance-20260925/`. The collections are in
-`demos/stack3-geometry-acceptance-20260925/` and
-`demos/stack4-geometry-acceptance-20260925/`. Both batches contain failures, so their
-`diagnostics/` directories retain all 100 individual traces instead of a single
-accepted-batch archive. All 10 targeted acceptance/backend tests passed.
-
-Planner-selection validation on 2026-09-28 passed all **237 tests**, including
-joint-action archive roundtrip, held-cube snapshot restore/replay, bounded
-execution, and controller mismatch rejection. Planner collection accepted seeds
-0 and 42 for both three and four cubes. Delta collection on those seeds exactly
-matched the previous three-cube actions, observations, and simulator states.
-Supplied-program verification through Hydra returned `verified_model`; a bounded
-MCMC/CEM search exercised planner rollouts and returned `budget_exhausted`.
-Details and archives are in `runs/planner-move-20260928/report.md`.
-
-A broader planner collection on seeds 0–99 accepted **92/100 three-block** and
-**90/100 four-block** demonstrations. Initial physical state vectors exactly
-matched the earlier 14 cm delta cohort, which accepted 100/100 for both sizes.
-All 18 planner failures came from mplib rejecting a tiny final integration step
-at both configured resolutions; collision and joint-limit checks passed.
-Successful planner runs used about 2.1 times as many simulator steps as delta on
-the same seeds. Controller settings stayed fixed throughout the experiment.
-The 182 accepted demonstrations, all failed-seed videos, exact rerun-parity
-checks, and detailed diagnosis are in `runs/planner-collection-20260928/report.md`.
+The planner integration passed 237 tests on 2026-09-28. Simulator validation
+should additionally collect fresh demonstrations, restore/replay a held-cube
+boundary, verify a supplied program, and exercise bounded full search. Unit
+tests alone do not establish those outcomes.

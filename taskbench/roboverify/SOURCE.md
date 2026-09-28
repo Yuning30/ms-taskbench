@@ -4,12 +4,15 @@ Copied from the local RoboVerify repository at commit
 `dec922349052883970d885600cd853c0e523cc05` on 2026-09-24.
 The original implementation is under `roboverify/synthesis/`.
 This package is self-contained; it does not import `~/RoboVerify`.
+The Hydra entry point is `solver=program_synthesis`; collection and the standalone
+pipeline live under `taskbench.roboverify.entry`.
 
 The copied core includes the program IR, relational CFG refinement and flat-loop
 quotienting, MCMC/CEM straight-line search, partition-based invariant inference,
 symbolic verification, geometric motion verification, and their supporting
 predicate and quantifier utilities. Selected upstream regression tests are kept
-beside these modules. `source_manifest.json` records the original file hashes.
+beside these modules. [`source_manifest.json`](source_manifest.json) records the
+original file hashes.
 
 Controller changes were selectively ported from RoboVerify commit
 `fd8dd579796ed31e46416fdf9bcd237f5294e1d0` on 2026-09-25. The manifest's
@@ -40,7 +43,7 @@ Local changes:
   Carrying moves track the actual payload center. Controller exhaustion and
   lost grasps stop execution. Failed candidate prefixes can inform search but
   cannot receive successful postcondition credit.
-- Delta Pick/Move/Release use 2 mm positional stopping tolerances, gain 20 and shared
+- Delta Pick/Move/Release use 2 mm positional stopping tolerances, gain 20, and
   50-step instruction budgets. Commands scale XYZ uniformly at both controller
   and backend boundaries; gripper commands remain independent. Release captures
   its XY target before opening and corrects lateral drift during retreat.
@@ -51,16 +54,26 @@ Local changes:
   budget. Archives identify the controller and budget; snapshots identify the
   action space so replay cannot silently use a different controller. The fixed
   Panda base's table contact is allowed; moving-link collision checks remain.
+  Loose cubes, the tower, and the held payload are not registered as planner
+  collision geometry. Planning uses a 0.01 rad integration step with one
+  0.005 rad retry. Some seeds still fail because mplib rejects a tiny final
+  increment before handling successful termination; this issue remains open.
 - Collection accepts only complete executions satisfying both StackNCube
-  success and the symbolic pre/postconditions. Candidate preparation also
-  requires physical success. `stack_reset.py` uses the validated Panda spacing
+  geometry/release success and the symbolic pre/postconditions. Velocities are
+  diagnostic only, and there is no final stability-duration requirement.
+  Candidate preparation also requires physical success. `stack_reset.py` uses
+  the validated Panda spacing
   sampler with 14 cm block-center separation along X or Y. Bounded retries use
   each seed's own RNG, with no expansion of the workspace. The copied Stack
   `Scattered` predicate keeps its separate 8 cm threshold for 40 mm cubes.
-- Runtime execution of legacy `PickPlace` macros is unsupported; the current
-  pipeline uses explicit `Pick`, `Move`, and `Release` primitives.
+- The runtime uses explicit `Pick`, `Move`, and `Release` primitives. These have
+  their own controller implementation, separate from `taskbench.skills`.
+  Synthesis consumes NPZ execution traces with snapshots and action prefixes;
+  the shared skill recorder writes HDF5 programs.
 
 The guarantee remains partial correctness in an idealized model, conditional
 on its premises and primitive contracts. Copying the verifier does not prove
 physical-controller refinement or termination. See
 [`docs/roboverify.md`](../../docs/roboverify.md) for the supported workflow.
+Controller, spacing, and planner validation results are recorded in
+[`docs/roboverify-validation.md`](../../docs/roboverify-validation.md).

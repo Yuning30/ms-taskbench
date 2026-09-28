@@ -1,141 +1,176 @@
-# Skills
+# Shared manipulation skills
 
-Skills are composable manipulation primitives. Use them through `SkillContext` — it bundles the env, motion planner, and object references so you only pass task-specific parameters.
+This guide covers `taskbench.skills`, used by `stack_cubes`, `replay`,
+`demo_recorder`, and other skill-based solvers. RoboVerify has a separate
+Pick/Move/Release runtime; its selectable controller is described in the
+[Stack guide](roboverify.md#choose-the-move-controller).
 
-## SkillContext
+## SkillContext and control selection
 
 ```python
 from taskbench.skills.context import SkillContext
 
-ctx = SkillContext(env, step_callback=recorder.record)
+ctx = SkillContext(env)
 ctx.reset(seed=42)
-
-# Skills are ready
 pick_result = ctx.pick("cube_1", lift_height=0.15)
-if pick_result.success:
-    ctx.place(target_pose, retract_height=0.2)
 ```
 
-`ctx.reset(seed)` handles: env reset, planner creation, object discovery, and skill re-initialization. You must call it before using any skills.
+Use one CPU environment. `reset()` resets the scene, creates an mplib planner,
+discovers objects, and binds new skill instances. `ctx.objects` maps names to
+actors. The registered robot configurations currently cover `panda` and
+`panda_wristcam`.
 
-After reset, `ctx.objects` is a `dict[str, Actor]` mapping object names to SAPIEN actors (from the env's `get_objects()` method).
+Pick, Place, and Move default to `naive=True`. Their behavior depends on the
+environment control mode:
 
-## Available Skills
+| Control mode | Default motion implementation |
+| --- | --- |
+| `pd_ee_delta_pose`, `pd_ee_delta_pos` | Cartesian position feedback in `naive_ee_control.py` |
+| `pd_joint_pos`, `pd_joint_pos_vel` | OBB-based grasp selection and mplib screw planning |
 
-### pick
+`stack_cubes` defaults to `pd_ee_delta_pose`. Select its planner path with:
+
+```bash
+uv run python -m taskbench.run solver=stack_cubes \
+  env.control_mode=pd_joint_pos env.max_episode_steps=1000 run.num_episodes=1
+```
+
+Setting `naive=False` alone does not select mplib in a delta-control environment:
+the lower-level `move_to_pose()` also detects delta control and uses TCP position
+feedback, ignoring the requested orientation. Shared skills do not acquire
+RoboVerify's 2 mm stopping rule or 14 cm reset spacing through this setting.
+
+A `step_callback` supplied to `SkillContext` is bound to skills at reset.
+If it is assigned after reset, call `ctx._build_skills()` to rebind the existing
+skills, as the current Stack recorder does. See the
+[recording example](demos.md#recording-shared-skills).
+
+## Poses and relative destinations
+
+A `PoseLike` is a `sapien.Pose` or a `(position, quaternion)` tuple.
+Positions and offsets are in world-frame metres; quaternions use
+`[w, x, y, z]`.
+
+Move and Place also accept an object name and a world-frame XYZ offset. This
+form resolves the object's position at call time and retains the current TCP
+orientation:
 
 ```python
-pick_result = ctx.pick(obj_name, *, lift_height=0.1, verify_grasp=True)
+# Move the TCP 15 cm above cube_0, keeping the gripper closed.
+move_result = ctx.move("cube_0", [0, 0, 0.15], gripper_open=False)
+
+# With default delta feedback, place the held 40 mm cube onto cube_0.
+place_result = ctx.place("cube_0", [0, 0, 0.04], retract_height=0.2)
 ```
 
-Grasp an object by name and lift it. Tries multiple grasp angles (6 candidates around the Z-axis) until one succeeds.
+The Place target has different semantics across its two paths: delta feedback
+targets the **held object's center**, while the planner path targets the **TCP**.
+For a planner placement, account for the measured cube-to-TCP offset when
+constructing the target pose. Move always targets the TCP in these shared skills.
 
-**Parameters:**
-- `obj_name` — string name of the object (resolved via `ctx.objects`)
-- `lift_height` — how high to lift after grasping (meters)
-- `verify_grasp` — check that the object is actually held after closing fingers
+## Pick
 
-**Returns:** `PickResult` with:
-- `success`, `failure_reason`
-- `grasp_pose` — the pose used for grasping
-- `lift_pose` — the pose after lifting (useful for computing place targets)
-- `obj_size` — bounding box of the grasped object
+Signature:
 
-### place
-
-```python
-place_result = ctx.place(target_pose, *, settling_steps=10, retract_height=None)
+```text
+ctx.pick(obj_name, *, lift_height=0.1, verify_grasp=True,
+         naive=True, naive_params=None)
 ```
 
-Move to a target pose, release the object, wait for it to settle, then retract.
+Pick grasps a named object and lifts it. `lift_height` is the additional height
+above the initial object/grasp position.
 
-**Parameters:**
-- `target_pose` — where to place. Accepts `sapien.Pose` or `(position, quaternion)` tuple
-- `settling_steps` — steps to wait after releasing
-- `retract_height` — Z height to retract to after placing (default: lift back up)
+- Delta feedback uses the pick/place feedback loop with release disabled.
+- The planner path computes a grasp from the object's oriented bounding box
+  and probes six rotations about Z before approaching, closing, and lifting.
+- `verify_grasp=True` checks `agent.is_grasping()`.
+- The held box is attached to the shared planner's collision model.
+- `naive_params` accepts `NaiveEEParams` from `naive_ee_control.py`.
 
-**Returns:** `PlaceResult` with `success`, `failure_reason`
+`PickResult` includes `success`, `failure_reason`, `grasp_pose`,
+`lift_pose`, and `obj_size`. In the delta branch the returned poses describe
+the post-lift TCP; do not assume `grasp_pose` records the initial contact pose.
 
-### move
+## Place
 
-```python
-move_result = ctx.move(target_pose, *, gripper_open=True, monitor_contacts=True)
+Signature:
+
+```text
+ctx.place(target_pose_or_cube, offsets=None, *, settling_steps=10,
+          retract_height=None, naive=True, naive_params=None)
 ```
 
-Move the end-effector to a target pose using screw-based motion planning.
+Place moves the held object to its destination, opens the gripper, detaches the
+shared planner's payload, settles, and retracts. The delta path discovers the
+held object through `agent.is_grasping()`; it fails if none is grasped.
 
-**Parameters:**
-- `target_pose` — target end-effector pose
-- `gripper_open` — gripper state during motion
-- `monitor_contacts` — abort if unexpected contacts occur
+`settling_steps` controls additional steps after release.
+`retract_height` is an absolute world Z coordinate; the default is target
+Z + 0.1 m. A failed final retract currently logs a warning and still returns
+`PlaceResult(success=True)`. Evaluate the task separately.
 
-**Returns:** `MoveResult` with `success`, `failure_reason`
+Use `target_pose_or_cube` as the keyword when recording or calling this method.
 
-### push
+## Move
 
-```python
-push_result = ctx.push(approach_pose, push_pose, *, clearance_height=0.1, lift_height=0.1)
+Signature:
+
+```text
+ctx.move(target_pose_or_cube, offsets=None, *, gripper_open=True,
+         monitor_contacts=True, naive=True, naive_gain=10.0,
+         naive_tol=0.008, naive_max_steps=200)
 ```
 
-Approach an object and sweep it to a target position.
+Move targets the TCP. The default delta branch servos its position with the
+given gain, tolerance, and step budget. The joint-control path uses
+`plan_screw()` and executes its trajectory. Planning failure returns
+`MoveResult(success=False)`; there is no RRT detour search.
 
-**Parameters:**
-- `approach_pose` — where to position before pushing
-- `push_pose` — where to push to
-- `clearance_height` — height to lift before approaching
-- `lift_height` — height to lift after pushing
+`monitor_contacts` applies to planner trajectory execution. It checks configured
+gripper links for contacts above 0.01 N and aborts on a detected contact.
+It is not a whole-scene collision monitor for the delta feedback loop.
 
-**Returns:** `PushResult` with `success`, `failure_reason`
+## Push
 
-## PoseLike
+Signature:
 
-All skills accept poses as either `sapien.Pose` or `(position, quaternion)` tuples:
-
-```python
-ctx.place(sapien.Pose([0.1, 0.0, 0.2], [1, 0, 0, 0]))
-ctx.place(([0.1, 0.0, 0.2], [1, 0, 0, 0]))
+```text
+ctx.push(approach_pose, push_pose, *, clearance_height=0.1, lift_height=0.1)
 ```
 
-Quaternion format is `[w, x, y, z]` (SAPIEN convention).
+Push lifts by `clearance_height`, closes the gripper, approaches, sweeps to
+`push_pose`, lifts by `lift_height`, and opens. It calls the shared Move
+implementation with `naive=False`; the environment control mode still determines
+the lower-level controller. Contact monitoring is disabled during the sweep.
+A failed final lift logs a warning and does not make the Push result fail.
 
-## Result Dataclasses
+## Results and lower-level helpers
 
-All skills return a `SkillResult` subclass:
+Every result has `success`, optional `failure_reason`, and optional
+`step_result` containing the last Gym step tuple. Pick adds the pose/size fields
+above. A skill result describes that skill's execution, not formal verification
+or overall task success.
 
-```python
-@dataclass
-class SkillResult:
-    success: bool
-    failure_reason: Optional[str] = None
-    step_result: Optional[tuple] = None  # last (obs, rew, term, trunc, info)
-```
+`RobotConfig` stores the move group, finger length, gripper-link names, and
+open/closed action values. `SkillContext` selects it from
+`env.unwrapped.agent.uid`.
 
-`PickResult` adds `grasp_pose`, `lift_pose`, and `obj_size` — used by downstream skills (e.g., computing where to place).
+| Function in `taskbench/skills/motion.py` | Purpose |
+| --- | --- |
+| `setup_planner(env, robot_config)` | Construct mplib planner and table point cloud |
+| `move_to_pose(env, planner, pose, gripper_state, robot_config, ...)` | Delta feedback or screw-plan execution; `dry_run=True` returns a plan in joint mode |
+| `follow_path(env, result, gripper_state, robot_config, ...)` | Execute a joint trajectory |
+| `actuate_gripper(env, planner, gripper_state, steps=6, ...)` | Hold the arm while opening/closing |
+| `build_action(env, qpos, gripper_state, qvel=None)` | Format actions for the selected control mode |
+| `attach_object(planner, size, pose=None)`, `detach_object(planner)` | Update the held-box collision model |
+| `add_collision_boxes(planner, boxes, resolution=0.01)` | Explicitly add obstacle geometry |
 
-## RobotConfig
+The default planner registers a table point cloud, positioned 2 cm below the
+table top. Loose blocks and the tower are not automatically added as obstacles.
+Shared Pick attaches its held box; RoboVerify's planner backend currently does
+not register a held-box collision object.
 
-Robot-specific constants (move group, finger length, gripper links) are stored in `RobotConfig`, not hardcoded:
-
-```python
-from taskbench.skills.robot_config import ROBOT_CONFIGS
-
-ROBOT_CONFIGS = {
-    "panda": RobotConfig(move_group="panda_hand_tcp", finger_length=0.025, ...),
-    "panda_wristcam": RobotConfig(...),
-}
-```
-
-`SkillContext` auto-detects the robot from `env.unwrapped.agent.uid`.
-
-## Motion Primitives (Lower Level)
-
-`taskbench/skills/motion.py` provides the functions that skills are built on:
-
-| Function | Description |
-|----------|-------------|
-| `setup_planner(env, robot_config)` | Create mplib Planner from env's robot |
-| `move_to_pose(env, planner, pose, gripper_state, robot_config, ...)` | Plan + execute straight-line screw motion |
-| `follow_path(env, result, gripper_state, robot_config, ...)` | Execute a pre-planned trajectory |
-| `actuate_gripper(env, planner, gripper_state, steps=6)` | Open/close gripper |
-| `build_action(env, qpos, gripper_state)` | Build action array for pd_joint_pos |
-| `attach_object(planner, size)` / `detach_object(planner)` | Inform planner about held objects |
+The shared screw helper defaults to a 0.1 rad joint integration step.
+RoboVerify explicitly uses 0.01 rad with one 0.005 rad retry and its own endpoint
+checks. That retry does not resolve all numerical planning failures; see the
+[planner collection results](roboverify-validation.md#planner-collection-2026-09-28).

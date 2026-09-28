@@ -1,96 +1,133 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for working with code in this repository.
 
-## Environment Setup
+## Environment setup
 
-This project uses **uv** for dependency management. Always use `uv run` (not `source .venv/bin/activate && python`) and `uv pip` (not bare `pip`) for all operations.
+This project uses **uv** for dependency management. Always use `uv run`
+for Python commands and `uv pip` for package operations; do not activate the
+virtual environment manually or use bare `pip`.
 
 ```bash
-# Create and sync the venv (installs all deps from pyproject.toml + uv.lock)
-uv sync
-
-# Or with dev extras (includes black, isort)
-uv sync --extra dev
-
-# Install additional packages (ALWAYS use uv pip, never bare pip)
+uv sync                               # Base project
+uv sync --extra roboverify            # Synthesis and verification dependencies
+uv sync --extra dev --extra roboverify
 uv pip install <package>
 ```
 
-## Running
+## Current Stack workflow
 
-Entry point is Hydra-based. Solver selection uses Hydra config groups (`solver=name`). **Always use `uv run`.**
+The canonical synthesis solver is `program_synthesis`. Its self-contained
+implementation is in `taskbench/roboverify`; it does not import `~/RoboVerify`.
+See [the Stack guide](docs/roboverify.md) for complete commands and proof scope.
 
 ```bash
-# Default run (random solver, 16 envs, 100 episodes)
-uv run python -m taskbench.run
+uv run --extra roboverify python -m taskbench.roboverify.entry.collect_demos \
+  --program taskbench.roboverify.examples.stack:build_program \
+  --num-blocks 3 --seeds 0 42 --max-loop-iterations 2 \
+  --move-controller delta --output-dir demos/stack3-delta
 
-# Cube stacking solver (env requirements set by configs/solver/stack_cubes.yaml)
-uv run python -m taskbench.run solver=stack_cubes
-
-# Common overrides
-uv run python -m taskbench.run env.record_video=true run.num_episodes=10
-uv run python -m taskbench.run seed=123 logging.use_wandb=true
+uv run --extra roboverify python -m taskbench.run solver=program_synthesis \
+  run.solver_kwargs.demos=demos/stack3-delta/demonstrations.npz \
+  'run.solver_kwargs.initial_arm=[0,0,0.17]'
 ```
 
-Hydra writes timestamped output dirs under `outputs/`. Videos go to `videos/`.
+Use a new collection directory. `initial_arm` is a geometric proof premise,
+not a physical robot reset command or a value inferred from the archive.
+The solver owns its environments: block count, controller, and planner budget
+belong under `run.solver_kwargs`. Select `move_controller=delta|planner`
+consistently for collection and synthesis. Planner mode currently has an
+unresolved mplib numerical termination failure on some seeds; see the guide.
 
-## Formatting
+RoboVerify resets use Panda, 14 cm minimum block-center separation along X or Y,
+and 50 initial settling steps. Final success uses geometry and release, plus
+complete execution and symbolic task predicates. Velocities are diagnostic;
+there is no stability-duration requirement.
+
+## Other entry points
+
+Solver selection uses Hydra config groups (`solver=name`).
+
+```bash
+# Random baseline on StackNCube; its reward must be sparse or none
+uv run python -m taskbench.run env.reward_mode=sparse run.num_episodes=10
+
+# Shared skills and HDF5 recording; default control is pd_ee_delta_pose
+uv run python -m taskbench.run solver=stack_cubes \
+  env.max_episode_steps=1000 run.num_episodes=10 env.record_video=true
+
+# Shared planner path
+uv run python -m taskbench.run solver=stack_cubes \
+  env.control_mode=pd_joint_pos env.max_episode_steps=1000 run.num_episodes=1
+
+# Build2D program execution
+uv run python -m taskbench.run solver=build2d_program \
+  env.extra_kwargs.grid_rows=3 env.extra_kwargs.grid_cols=4
+```
+
+Hydra writes configuration/logging output under `outputs/`. Shared Stack
+recordings go to `data/` and runner videos to `videos/`. RoboVerify collections
+write NPZ traces and optional videos under their collection directory; synthesis
+artifacts go to `runs/cfg/`. See [recording formats](docs/demos.md).
+
+## Architecture and extension
+
+See [architecture](docs/architecture.md) and [shared skills](docs/skills.md).
+
+`taskbench/run.py` dispatches random actions to `run_random()`. Other solvers
+are auto-discovered through `@register_solver` and called with
+`solve(env, seed=None, cfg=None)`. The runner creates a single CPU environment
+only when `requires_env=True`. `program_synthesis` sets it to `False`.
+Results with `verification_status` retain their formal outcome rather than
+being overwritten by environment success.
+
+To add a solver:
+
+1. Create `taskbench/solvers/my_solver.py` with a registered `BaseSolver`
+   subclass and the current `solve` signature.
+2. Add `configs/solver/my_solver.yaml` with `# @package _global_` and its
+   solver/environment settings.
+3. Run `uv run python -m taskbench.run solver=my_solver`.
+
+Shared `SkillContext` binds Pick/Place/Move/Push after `reset()`.
+Its default feedback path and planner path depend on `env.control_mode`.
+RoboVerify has its own Pick/Move/Release runtime; changes to shared skills do
+not automatically change that runtime. Both paths reuse low-level mplib helpers.
+
+Key modules:
+
+- `taskbench/solver.py`: solver registry and result contract.
+- `taskbench/envs/factory.py`: vectorized and single-environment factories.
+- `taskbench/envs/base.py`: `TaskEnv` and object-discovery interface.
+- `taskbench/skills/context.py`, `primitives.py`, `motion.py`: shared skills.
+- `taskbench/skills/robot_config.py`: robot-specific planner/gripper constants.
+- `taskbench/recorder.py`: HDF5 state and skill-call recording.
+- `taskbench/programs/`: Build2D program representation and execution.
+- `taskbench/solvers/program_synthesis.py`: Hydra-to-RoboVerify wrapper.
+- `taskbench/roboverify/backend.py`, `stack_reset.py`: ManiSkill adapter/reset.
+- `taskbench/roboverify/entry/`, `cfg/`: collection and synthesis pipeline.
+- `taskbench/roboverify/SOURCE.md`: copied-source provenance and adaptations.
+
+## Validation and formatting
 
 ```bash
 uv run black taskbench/
 uv run isort taskbench/
 ```
 
-The RoboVerify migration has `unittest` coverage under `taskbench/roboverify/`.
-See `docs/roboverify.md` for the test command and simulator validation workflow.
+RoboVerify uses `unittest` under `taskbench/roboverify/`, plus
+`taskbench/envs/test_stack_n_cube.py`. See the
+[test command and simulator validation workflow](docs/roboverify.md#tests).
+Dated results are in [the validation history](docs/roboverify-validation.md).
 
-## Architecture
+## mplib / ManiSkill constraints
 
-**taskbench** is a robotics research testbed for evaluating solvers on ManiSkill3 manipulation tasks. See `docs/architecture.md` for full documentation.
-
-### Core Flow
-
-`taskbench/run.py` is the entry point (`@hydra.main`). It dispatches based on `cfg.run.solver`:
-- `"random"` → `run_random()` — vectorized env (`ManiSkillVectorEnv`), samples random actions
-- Any other value → `run_solver()` — auto-discovers solver via `@register_solver`, creates a single env, runs episode loop
-
-### Solver System (pluggable, zero-touch)
-
-Solvers self-register via `@register_solver("name")` decorator in `taskbench/solver.py`. Auto-discovery walks `taskbench/solvers/*.py` via `pkgutil`. Adding a new solver requires **no edits to core files**:
-1. Create `taskbench/solvers/my_solver.py` with `@register_solver("my_solver")` inheriting `BaseSolver`
-2. Create `configs/solver/my_solver.yaml` with env requirements (`# @package _global_`)
-3. Run: `python -m taskbench.run solver=my_solver`
-
-### Skill System
-
-Skills are composable objects (`Pick`, `Place`, `Move`, `Push`) in `taskbench/skills/primitives.py`. Use `SkillContext` to eliminate boilerplate:
-```python
-ctx = SkillContext(env, step_callback=recorder.record)
-ctx.reset(seed=42)
-ctx.pick("cube_1")
-ctx.place(target_pose)
-```
-
-Robot-specific constants live in `RobotConfig` (`taskbench/skills/robot_config.py`), not hardcoded. Skills accept `PoseLike` (tuples or `sapien.Pose`) and resolve objects by string name.
-
-### Key Modules
-
-- **`configs/default.yaml`** — Hydra config (YAML-only, no Python dataclasses). Solver configs in `configs/solver/`.
-- **`taskbench/envs/factory.py`** — `make_env()` (vectorized) and `make_single_env()` (raw, for motion planner).
-- **`taskbench/envs/base.py`** — `TaskEnv` base class with abstract `get_objects()`.
-- **`taskbench/solver.py`** — `BaseSolver` ABC, `SolverResult`, `@register_solver`, `discover_solvers()`.
-- **`taskbench/skills/robot_config.py`** — `RobotConfig` dataclass + `ROBOT_CONFIGS` registry.
-- **`taskbench/skills/context.py`** — `SkillContext` — bundles env + planner + objects + skills.
-- **`taskbench/skills/motion.py`** — Low-level mplib helpers: `setup_planner()`, `move_to_pose()` (straight-line screw interpolation, no RRT), `build_action()`, `PoseLike`.
-- **`taskbench/skills/primitives.py`** — Composable skill objects with `SkillResult` dataclasses.
-- **`taskbench/recorder.py`** — `StateRecorder` for capturing simulation state to HDF5.
-- **`taskbench/logger.py`** — Optional WandB logging wrapper.
-
-### Critical Constraints (mplib / ManiSkill)
-
-- **mplib 0.2.x API**: Uses `mplib.pymp.Pose` objects (not numpy arrays) for `set_base_pose()`, `plan_screw()`, etc.
-- **SAPIEN poses are batched**: Even with `num_envs=1`, pose tensors have shape `(1, 3)` / `(1, 4)` — must `.flatten()` before passing to mplib.
-- **Motion planner requires**: `num_envs=1`, `sim_backend="cpu"`, `pd_joint_pos` control mode, no `ManiSkillVectorEnv` wrapper.
-- **Video recording with planner**: Must use `save_on_reset=False` on `RecordEpisode` and call `env.flush_video()` manually.
-- **numpy < 2.0** required by mplib 0.2.1.
+- mplib 0.2.x takes `mplib.pymp.Pose` for `set_base_pose()` and `plan_screw()`.
+- SAPIEN pose tensors are batched even for one environment; flatten before
+  passing positions/quaternions to mplib.
+- Planner execution requires one CPU environment without a
+  `ManiSkillVectorEnv` wrapper, and joint-position control. Shared helpers also
+  support `pd_joint_pos_vel`; RoboVerify planner mode uses `pd_joint_pos`.
+- Shared planner video recording uses `RecordEpisode(save_on_reset=False)`
+  and explicit `flush_video()`.
+- NumPy must stay below 2.0 for mplib 0.2.1.
