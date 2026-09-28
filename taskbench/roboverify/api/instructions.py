@@ -14,14 +14,18 @@ from taskbench.roboverify.util import on as on_util
 
 
 class PrimitiveExecutionError(RuntimeError):
-    """An instruction exhausted its controller budget or failed its grasp."""
+    """An instruction exhausted its budget or failed its motion plan or grasp."""
 
 
 def _eval_primitive(instruction, env, traj, return_image, operation, *args):
     controller = PrimitiveController(
         env,
         traj,
-        limit=instruction.limit,
+        limit=(
+            env.planner_step_limit
+            if getattr(env, "move_controller", "delta") == "planner"
+            else instruction.limit
+        ),
         control=instruction.control,
         render=return_image,
     )

@@ -40,6 +40,7 @@ class ControlResult:
     steps: int
     phase: str
     position_error: float | None = None
+    failure_reason: str | None = None
 
 
 def get_move_action(
@@ -129,8 +130,54 @@ class PrimitiveController:
                 close_gripper=close_gripper,
             )
 
+        if getattr(self.env, "move_controller", "delta") == "planner":
+            return self._planned_move(
+                target,
+                error,
+                close_gripper=close_gripper,
+                vertical_only=vertical_only,
+                phase=phase,
+                payload_id=payload_id,
+            )
         return self._until(
             phase, lambda: error() <= self.control.position_tolerance, action, error
+        )
+
+    def _planned_move(
+        self, target, error, *, close_gripper, vertical_only, phase, payload_id
+    ):
+        if error() <= self.control.position_tolerance or self.steps >= self.limit:
+            converged = error() <= self.control.position_tolerance
+            self.result = ControlResult(converged, self.steps, phase, float(error()))
+            return converged
+        tracked = (
+            self.observation[:3]
+            if payload_id is None
+            else self.box_position(payload_id)
+        )
+        displacement = target - tracked
+        if vertical_only:
+            displacement[:2] = 0
+        # Move the held cube to the requested destination, accounting for its
+        # measured offset from the TCP rather than treating their centers alike.
+        path = self.env.plan_move(self.observation[:3] + displacement)
+        if path is None or len(path) == 0:
+            self.result = ControlResult(
+                False, self.steps, phase, float(error()), "motion_plan_failed"
+            )
+            return False
+        gripper = -1.0 if close_gripper else self.env.gripper_command
+        for joints in path:
+            if self.steps >= self.limit:
+                break
+            self._step(np.r_[joints, gripper])
+        # Planning success is not physical convergence. Allow the joint drives
+        # to reach the last waypoint within the instruction's remaining budget.
+        return self._until(
+            phase,
+            lambda: error() <= self.control.position_tolerance,
+            lambda: np.r_[path[-1], gripper],
+            error,
         )
 
     def gripper(self, *, opened):
@@ -147,10 +194,15 @@ class PrimitiveController:
                 )
             return bool(is_open()) == opened
 
+        command = (
+            self.env.hold_action(opened=opened)
+            if hasattr(self.env, "hold_action")
+            else np.array([0.0, 0.0, 0.0, 0.2 if opened else -0.2])
+        )
         result = self._until(
             "open" if opened else "close",
             ready,
-            lambda: np.array([0.0, 0.0, 0.0, 0.2 if opened else -0.2]),
+            lambda: command,
         )
         if opened and result and hasattr(self.env, "held_box_id"):
             self.env.held_box_id = None

@@ -9,6 +9,10 @@ from copy import deepcopy
 
 import numpy as np
 
+from taskbench.roboverify.entry.controller_options import (
+    DEFAULT_PLANNER_STEP_LIMIT,
+    MOVE_CONTROLLERS,
+)
 from taskbench.roboverify.stack_reset import (
     BLOCK_LENGTH,
     DEFAULT_SEPARATION,
@@ -41,7 +45,20 @@ def flatten_state(state, prefix="state"):
 class StackBackend:
     """Single CPU Panda environment exposing RoboVerify's primitive interface."""
 
-    def __init__(self, num_blocks=3, *, separation=DEFAULT_SEPARATION):
+    move_controller = "delta"
+
+    def __init__(
+        self,
+        num_blocks=3,
+        *,
+        separation=DEFAULT_SEPARATION,
+        move_controller="delta",
+        planner_step_limit=DEFAULT_PLANNER_STEP_LIMIT,
+    ):
+        if move_controller not in MOVE_CONTROLLERS:
+            raise ValueError(f"move_controller must be one of {MOVE_CONTROLLERS}")
+        if type(planner_step_limit) is not int or planner_step_limit <= 0:
+            raise ValueError("planner_step_limit must be a positive integer")
         import gymnasium as gym
 
         import taskbench.envs  # noqa: F401
@@ -51,6 +68,9 @@ class StackBackend:
         if not np.isclose(on.get_block_length(), BLOCK_LENGTH):
             raise ValueError("Use using_block_length(0.04) with StackNCube")
         self.num_blocks = num_blocks
+        self.move_controller = move_controller
+        self.planner_step_limit = planner_step_limit
+        self.planner = None
         self.separation = separation
         self.layout_sampling = {}
         self.simulator = gym.make(
@@ -60,7 +80,9 @@ class StackBackend:
             robot_init_qpos_noise=0.0,
             obs_mode="state",
             reward_mode="sparse",
-            control_mode="pd_ee_delta_pose",
+            control_mode=(
+                "pd_joint_pos" if move_controller == "planner" else "pd_ee_delta_pose"
+            ),
             num_envs=1,
             sim_backend="cpu",
             render_backend="cpu",
@@ -90,6 +112,7 @@ class StackBackend:
         # Reset physics and retain the original per-seed cube yaw, then install
         # the tested layout before collection's normal 50 settling steps.
         self.simulator.reset(seed=seed)
+        self.planner = None
         for cube, position in zip(self.raw.cubes, xy):
             cube.set_pose(
                 Pose.create_from_pq(
@@ -120,6 +143,17 @@ class StackBackend:
         return np.asarray(obs, dtype=float).copy()
 
     def step(self, action):
+        if self.move_controller == "planner":
+            command = np.asarray(action, dtype=np.float32)
+            if command.shape != (8,) or not np.isfinite(command).all():
+                raise ValueError(
+                    "Planner actions must contain seven joint positions and a gripper command"
+                )
+            if not -1 <= command[-1] <= 1:
+                raise ValueError("Gripper command must be in [-1, 1]")
+            self.gripper_command = float(command[-1])
+            _, reward, terminated, truncated, info = self.simulator.step(command)
+            return self._get_obs(), reward, terminated, truncated, info
         action = bound_delta_action(action)
         # RoboVerify's controller assumes 5 cm per bounded Cartesian command;
         # Panda's normalized delta controller uses 10 cm. Both use world/root
@@ -134,10 +168,58 @@ class StackBackend:
         _, reward, terminated, truncated, info = self.simulator.step(command)
         return self._get_obs(), reward, terminated, truncated, info
 
+    def hold_action(self, *, opened):
+        """Hold the arm while actuating the gripper, in the selected action space."""
+        if self.move_controller == "planner":
+            joints = array(self.raw.agent.robot.get_qpos()).reshape(-1)[:7]
+            return np.r_[joints, 1.0 if opened else -1.0]
+        return np.array([0.0, 0.0, 0.0, 0.2 if opened else -0.2])
+
+    def plan_move(self, position):
+        """Use the shared screw planner, retaining the current TCP orientation.
+
+        Execution goes through the primitive controller so every joint command
+        counts against its budget and is captured by recording/replay.
+        """
+        import sapien
+
+        from taskbench.skills.motion import move_to_pose, setup_planner
+        from taskbench.skills.robot_config import get_robot_config
+
+        if self.move_controller != "planner":
+            raise ValueError("plan_move requires move_controller='planner'")
+        config = get_robot_config(self.simulator)
+        if self.planner is None:
+            self.planner = setup_planner(self.simulator, config)
+            # Panda is mounted on the table. The table point-cloud margin
+            # overlaps its fixed base; moving arm links still collide normally.
+            self.planner.acm.set_entry("panda_link0", "table", True)
+        orientation = array(self.raw.agent.tcp.pose.q).reshape(-1)[:4]
+        target = sapien.Pose(position, orientation)
+        # mplib can reject a tiny final integration step even on a feasible
+        # path. Retry once at finer resolution, from the same physical start
+        # and toward the same pose, retaining every collision/joint-limit check.
+        for resolution in (0.01, 0.005):
+            result = move_to_pose(
+                self.simulator,
+                self.planner,
+                target,
+                self.gripper_command,
+                config,
+                dry_run=True,
+                qpos_step=resolution,
+            )
+            if result is not None:
+                return np.asarray(result["position"])
+        return None
+
     def capture(self):
         from taskbench.roboverify.cfg.reset import Snapshot
 
         arrays = flatten_state(self.raw.get_state_dict())
+        arrays["adapter/move_controller"] = np.asarray(
+            MOVE_CONTROLLERS.index(self.move_controller)
+        )
         arrays["adapter/gripper"] = np.asarray(self.gripper_command)
         arrays["adapter/held"] = np.asarray(
             -1 if self.held_box_id is None else self.held_box_id
@@ -168,6 +250,11 @@ class StackBackend:
         import torch
         from mani_skill.utils.structs.pose import Pose
 
+        saved_controller = int(snapshot.arrays.get("adapter/move_controller", 0))
+        if saved_controller != MOVE_CONTROLLERS.index(self.move_controller):
+            raise ValueError(
+                "Snapshot move controller differs from the runtime controller"
+            )
         state = {}
         for key, value in snapshot.arrays.items():
             if not key.startswith("state/"):

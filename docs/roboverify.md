@@ -40,11 +40,59 @@ affect acceptance.
 All integration coordinates, offsets, and error bounds are in world-frame metres.
 The physical and formal block length is 0.04 m; there is no coordinate rescaling.
 
-The controller bounds Cartesian actions with uniform XYZ scaling, uses a 2 mm
+The default delta controller bounds Cartesian actions with uniform XYZ scaling, uses a 2 mm
 Pick stopping tolerance, and corrects Release XY drift toward the position
 captured before opening. All primitives use gain 20 and 50-step budgets, with
 gripper latching, actual Panda grasp checks, and held-cube feedback. The 2 mm
 tolerance is an endpoint criterion, not a bound on the entire path.
+
+## Choose the move controller
+
+Set `--move-controller delta` (the default) or `--move-controller planner` for
+collection and the standalone synthesis/verification CLI. With Hydra, set
+`run.solver_kwargs.move_controller=delta` or `planner`. This selects the motion
+implementation inside Pick, Move, and Release; the program's operands, offsets,
+14 cm reset spacing, and task acceptance criteria stay the same.
+
+For planner demonstrations:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 uv run --extra roboverify python -m taskbench.roboverify.entry.collect_demos \
+  --program taskbench.roboverify.examples.stack:build_program \
+  --num-blocks 3 --seeds 0 42 --max-loop-iterations 2 \
+  --move-controller planner --output-dir demos/stack3-planner
+```
+
+Then use the same controller for synthesis:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 uv run --extra roboverify python -m taskbench.run \
+  solver=program_synthesis \
+  run.solver_kwargs.move_controller=planner \
+  run.solver_kwargs.demos=demos/stack3-planner/demonstrations.npz \
+  'run.solver_kwargs.initial_arm=[0,0,0.17]'
+```
+
+Planner mode uses the shared mplib `plan_screw()` helper with `pd_joint_pos`.
+Each motion keeps the current TCP orientation and plans straight translation.
+Held-cube destinations account for the measured cube-to-TCP offset. Execution
+still requires the measured TCP/cube endpoint to reach the 2 mm tolerance and
+checks that a carried cube remains grasped. A planning failure stops the
+primitive without switching controllers or searching for a detour.
+
+Planner primitives use `--planner-step-limit 200` by default, including gripper
+phases, instead of the DSL's delta step budget. Adjust it through
+`run.solver_kwargs.planner_step_limit` in Hydra. The planner uses a 0.01 rad joint
+integration step for numerical accuracy, retrying once at 0.005 rad if planning
+fails, and executes at the normal simulator control timestep. Both attempts use
+the same start and destination. It retains table and self-collision checks, allowing only the
+fixed Panda base's mounting contact with the table. Loose cubes, the tower, and
+the carried cube are not registered as planner collision geometry.
+
+Archives record the selected controller and planner budget. Synthesis checks
+these settings and uses them for candidate execution and joint-action replay.
+Set controller selection under `run.solver_kwargs`; this solver owns its
+environment, so `env.control_mode` does not choose its controller.
 
 ## Compare controller paths
 
@@ -193,7 +241,7 @@ Panda controller refinement, grasp reliability, or total termination. Successful
 physical demonstrations are validation evidence, separate from those proofs.
 
 The adapter currently supports 2–6 uniform cubes, Panda, CPU simulation, and
-`pd_ee_delta_pose`. Runtime data are still subject to the copied predicate
+`pd_ee_delta_pose` or planner-driven `pd_joint_pos`. Runtime data are still subject to the copied predicate
 assumptions, including scattered initial cubes and a shared height tolerance.
 The snapshot API does not expose all internal PhysX caches, so replay is checked
 numerically and refused if it differs by more than 1e-5 m in recorded features.
@@ -305,3 +353,22 @@ The full report, source hashes, and per-seed measurements are in
 `demos/stack4-geometry-acceptance-20260925/`. Both batches contain failures, so their
 `diagnostics/` directories retain all 100 individual traces instead of a single
 accepted-batch archive. All 10 targeted acceptance/backend tests passed.
+
+Planner-selection validation on 2026-09-28 passed all **237 tests**, including
+joint-action archive roundtrip, held-cube snapshot restore/replay, bounded
+execution, and controller mismatch rejection. Planner collection accepted seeds
+0 and 42 for both three and four cubes. Delta collection on those seeds exactly
+matched the previous three-cube actions, observations, and simulator states.
+Supplied-program verification through Hydra returned `verified_model`; a bounded
+MCMC/CEM search exercised planner rollouts and returned `budget_exhausted`.
+Details and archives are in `runs/planner-move-20260928/report.md`.
+
+A broader planner collection on seeds 0–99 accepted **92/100 three-block** and
+**90/100 four-block** demonstrations. Initial physical state vectors exactly
+matched the earlier 14 cm delta cohort, which accepted 100/100 for both sizes.
+All 18 planner failures came from mplib rejecting a tiny final integration step
+at both configured resolutions; collision and joint-limit checks passed.
+Successful planner runs used about 2.1 times as many simulator steps as delta on
+the same seeds. Controller settings stayed fixed throughout the experiment.
+The 182 accepted demonstrations, all failed-seed videos, exact rerun-parity
+checks, and detailed diagnosis are in `runs/planner-collection-20260928/report.md`.

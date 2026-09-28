@@ -35,6 +35,7 @@ from taskbench.roboverify.cfg.straightline import (
 )
 from taskbench.roboverify.cfg.tasks import task_identity, task_spec
 from taskbench.roboverify.cfg.verified_synthesis import verified_synthesis
+from taskbench.roboverify.entry.controller_options import add_controller_options
 from taskbench.roboverify.entry.motion_options import (
     add_motion_options,
     motion_noise_from_args,
@@ -72,6 +73,18 @@ def _run(args, logger):
     context = HighLevelContext(use_tbl=args.task == "unstack")
     traces = load_traces(args.demos, require_valid=True)
     for trace in traces:
+        if trace.metadata.get("move_controller", "delta") != args.move_controller:
+            raise ValueError(
+                "Demonstration move controller differs from --move-controller; "
+                "select the controller used for collection"
+            )
+        if (
+            args.move_controller == "planner"
+            and trace.metadata.get("planner_step_limit") != args.planner_step_limit
+        ):
+            raise ValueError(
+                "Demonstration planner step limit differs from --planner-step-limit"
+            )
         if (
             trace.metadata.get("backend") != BACKEND_ID
             or trace.metadata.get("block_length") != BLOCK_LENGTH
@@ -149,7 +162,12 @@ def _run(args, logger):
     )
 
     def env_factory(trace):
-        return make_roboverify_env(trace.task, num_blocks=trace.num_blocks)
+        return make_roboverify_env(
+            trace.task,
+            num_blocks=trace.num_blocks,
+            move_controller=args.move_controller,
+            planner_step_limit=args.planner_step_limit,
+        )
 
     rollout = partial(
         segment_rollout, env_factory=env_factory, reset_mode=args.reset_mode
@@ -282,10 +300,15 @@ def _run(args, logger):
             or t.metadata.get("backend") != BACKEND_ID
             or t.metadata.get("block_length") != BLOCK_LENGTH
             or t.metadata.get("higher_tolerance") != args.higher_tolerance
+            or t.metadata.get("move_controller", "delta") != args.move_controller
+            or (
+                args.move_controller == "planner"
+                and t.metadata.get("planner_step_limit") != args.planner_step_limit
+            )
             for t in extra
         ):
             raise ValueError(
-                "Additional demonstrations must use the same task, specification, and block count"
+                "Additional demonstrations must use the same task, specification, block count, and move controller"
             )
         return [
             DemoSegment(
@@ -372,12 +395,14 @@ def _run(args, logger):
         motion=str(result.motion),
         demonstration_checks=demo_checks,
         task=args.task,
+        move_controller=args.move_controller,
     )
     return 0 if result else 2
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
+    add_controller_options(parser)
     parser.add_argument("--task", choices=("stack",), default="stack")
     parser.add_argument("--mode", choices=("full", "verify"), default="full")
     parser.add_argument("--program", help="DSL factory required by --mode verify")
@@ -460,8 +485,10 @@ def main(argv=None):
         args.quotient = True
     if args.mode == "verify" and not args.program:
         parser.error("--mode verify requires --program module:factory")
-    if args.max_loop_iterations < 1 or not 0 < args.trajectory_timeout_seconds < float(
-        "inf"
+    if (
+        args.planner_step_limit < 1
+        or args.max_loop_iterations < 1
+        or not 0 < args.trajectory_timeout_seconds < float("inf")
     ):
         parser.error("Execution budgets must be positive and finite")
     if args.smoke:

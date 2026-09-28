@@ -293,7 +293,8 @@ def detach_object(planner):
 
 
 def move_to_pose(env, planner, pose, gripper_state, robot_config: RobotConfig,
-                 dry_run=False, monitor_contacts=False, step_callback=None):
+                 dry_run=False, monitor_contacts=False, step_callback=None,
+                 qpos_step=0.1):
     """Plan and execute a straight-line motion to target pose.
 
     For ``pd_ee_delta_pose`` / ``pd_ee_delta_pos``, skips mplib and servos TCP
@@ -301,7 +302,8 @@ def move_to_pose(env, planner, pose, gripper_state, robot_config: RobotConfig,
     ``pose`` is not tracked for deltas).
 
     For joint-space modes, uses ``plan_screw()`` (Cartesian straight-line
-    interpolation in the planner).
+    interpolation in the planner). ``qpos_step`` controls the planner's joint
+    integration resolution, independently of the simulation control timestep.
 
     Returns None on planning failure, the plan dict if dry_run=True,
     or the last (obs, reward, terminated, truncated, info) tuple.
@@ -322,6 +324,7 @@ def move_to_pose(env, planner, pose, gripper_state, robot_config: RobotConfig,
     result = planner.plan_screw(
         goal,
         current_qpos,
+        qpos_step=qpos_step,
         time_step=env.unwrapped.control_timestep,
     )
     if result["status"] != "Success":

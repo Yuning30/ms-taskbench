@@ -163,6 +163,8 @@ def record_execution(
     video_path=None,
     render=False,
     guard_choices=None,
+    move_controller="delta",
+    planner_step_limit=200,
 ):
     """Record a program from a settled Stack reset or an exact saved snapshot.
 
@@ -223,8 +225,19 @@ def record_execution(
             set_np_seed(seed)
             env = (
                 env_factory
-                or (lambda: make_roboverify_env(task, num_blocks=num_blocks))
+                or (
+                    lambda: make_roboverify_env(
+                        task,
+                        num_blocks=num_blocks,
+                        move_controller=move_controller,
+                        planner_step_limit=planner_step_limit,
+                    )
+                )
             )()
+            inner = inner_env(env)
+            metadata["move_controller"] = getattr(inner, "move_controller", "delta")
+            if metadata["move_controller"] == "planner":
+                metadata["planner_step_limit"] = inner.planner_step_limit
             if initial_snapshot is None:
                 first = env.reset(seed=seed)[0]
                 if task == "stack":
@@ -233,8 +246,17 @@ def record_execution(
                     layout = getattr(inner, "layout_sampling", None)
                     if layout is not None:
                         metadata["initialization"]["layout_sampling"] = dict(layout)
+                    hold = (
+                        inner.hold_action(opened=True)
+                        if metadata["move_controller"] == "planner"
+                        else None
+                    )
                     for _ in range(STACK_SETTLING_STEPS):
-                        env.step(get_move_action(first, target, close_gripper=False))
+                        env.step(
+                            hold
+                            if hold is not None
+                            else get_move_action(first, target, close_gripper=False)
+                        )
                         metadata["initialization"]["settling_steps"] += 1
                         first = inner.flatten_observation(inner._get_obs())
             else:

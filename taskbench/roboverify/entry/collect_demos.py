@@ -13,6 +13,7 @@ from taskbench.roboverify.cfg.collection import (
 from taskbench.roboverify.cfg.program_source import load_program
 from taskbench.roboverify.cfg.recordings import save_traces
 from taskbench.roboverify.cfg.tasks import task_identity
+from taskbench.roboverify.entry.controller_options import add_controller_options
 from taskbench.roboverify.entry.predicate_options import add_predicate_options
 from taskbench.roboverify.util.on import using_block_length, using_higher_tolerance
 from taskbench.roboverify.verification_lib.highlevel_verification_lib import (
@@ -92,6 +93,7 @@ def build_parser():
     parser.add_argument("--max-loop-iterations", type=int, default=100)
     parser.add_argument("--trajectory-timeout-seconds", type=float, default=60)
     add_predicate_options(parser)
+    add_controller_options(parser)
     return parser
 
 
@@ -110,6 +112,7 @@ def collect(args, parser):
         seeds = resolve_seeds(args)
         if (
             args.num_blocks < 2
+            or args.planner_step_limit < 1
             or args.max_loop_iterations < 1
             or not 0 < args.trajectory_timeout_seconds < float("inf")
         ):
@@ -129,6 +132,8 @@ def collect(args, parser):
         seeds=seeds,
         num_blocks=args.num_blocks,
         higher_tolerance=args.higher_tolerance,
+        move_controller=args.move_controller,
+        planner_step_limit=args.planner_step_limit,
         trajectories=[],
         status="collecting",
     )
@@ -152,6 +157,8 @@ def collect(args, parser):
                     else None
                 ),
                 render=args.render,
+                move_controller=args.move_controller,
+                planner_step_limit=args.planner_step_limit,
             )
         except Exception as exc:
             from taskbench.roboverify.cfg.demos import DemoTrace
@@ -207,7 +214,7 @@ def collect(args, parser):
         import shlex
 
         archive = shlex.quote(str(output / "demonstrations.npz"))
-        common = f"uv run --extra roboverify python -m taskbench.roboverify.entry.synthesize_cfg --task stack --num-blocks {args.num_blocks} --demos {archive} --higher-tolerance {args.higher_tolerance}"
+        common = f"uv run --extra roboverify python -m taskbench.roboverify.entry.synthesize_cfg --task stack --num-blocks {args.num_blocks} --demos {archive} --higher-tolerance {args.higher_tolerance} --move-controller {args.move_controller} --planner-step-limit {args.planner_step_limit}"
         print(f"Full pipeline: {common} --mode full --quotient")
         print(
             f"Verify program: {common} --mode verify --program {shlex.quote(args.program)}"

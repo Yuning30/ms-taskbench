@@ -40,10 +40,17 @@ Local changes:
   Carrying moves track the actual payload center. Controller exhaustion and
   lost grasps stop execution. Failed candidate prefixes can inform search but
   cannot receive successful postcondition credit.
-- Pick/Move/Release use 2 mm positional stopping tolerances, gain 20 and shared
+- Delta Pick/Move/Release use 2 mm positional stopping tolerances, gain 20 and shared
   50-step instruction budgets. Commands scale XYZ uniformly at both controller
   and backend boundaries; gripper commands remain independent. Release captures
   its XY target before opening and corrects lateral drift during retreat.
+- `move_controller=planner` uses the shared mplib screw planner and Panda joint
+  position control for those same primitive motion phases. It preserves TCP
+  orientation, offsets the target for the held cube, and checks actual endpoint
+  convergence and grasp state. Planner primitives have a configurable 200-step
+  budget. Archives identify the controller and budget; snapshots identify the
+  action space so replay cannot silently use a different controller. The fixed
+  Panda base's table contact is allowed; moving-link collision checks remain.
 - Collection accepts only complete executions satisfying both StackNCube
   success and the symbolic pre/postconditions. Candidate preparation also
   requires physical success. `stack_reset.py` uses the validated Panda spacing

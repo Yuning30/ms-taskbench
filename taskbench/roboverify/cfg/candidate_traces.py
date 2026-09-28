@@ -95,6 +95,8 @@ def prepare_candidate(
             initial_snapshot=source.snapshots[segment.t_start],
             max_loop_iterations=max_loop_iterations,
             timeout_seconds=timeout_seconds,
+            move_controller=source.metadata.get("move_controller", "delta"),
+            planner_step_limit=source.metadata.get("planner_step_limit", 200),
         )
         traces.append(trace)
         if logger and trace.states:

@@ -1,6 +1,8 @@
 """Regression checks for boundaries introduced by the ManiSkill migration."""
 
+import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -158,6 +160,67 @@ class PandaResetTests(unittest.TestCase):
                         self.assertIsNone(env.held_box_id)
                     finally:
                         env.close()
+
+
+class PlannerReplayTests(unittest.TestCase):
+    def test_joint_archive_roundtrip_and_held_cube_reset_replay(self):
+        from taskbench.roboverify.cfg.collection import record_execution
+        from taskbench.roboverify.cfg.demos import DemoSegment
+        from taskbench.roboverify.cfg.program_source import load_program
+        from taskbench.roboverify.cfg.recordings import load_traces, save_traces
+        from taskbench.roboverify.cfg.reset import reset_segment
+        from taskbench.roboverify.verification_lib.highlevel_verification_lib import (
+            HighLevelContext,
+        )
+
+        with on.using_block_length(0.04):
+            definition = load_program(
+                "taskbench.roboverify.examples.stack:build_program",
+                HighLevelContext(mode="declare"),
+                3,
+            )
+            trace = record_execution(
+                definition,
+                seed=42,
+                num_blocks=3,
+                move_controller="planner",
+                max_loop_iterations=2,
+            )
+            self.assertTrue(validate_trace(trace), trace.metadata)
+            self.assertEqual(trace.metadata["move_controller"], "planner")
+            self.assertEqual(trace.metadata["planner_step_limit"], 200)
+            self.assertEqual(np.asarray(trace.actions[0]).shape[1], 8)
+            with tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "planner.npz"
+                save_traces(path, [trace])
+                trace = load_traces(path, require_valid=True)[0]
+            event = next(
+                e
+                for e in trace.events
+                if e["kind"] == "instruction_end"
+                and e.get("control", {}).get("phase") == "move"
+                and trace.snapshots[e["index"]].arrays["adapter/held"] >= 0
+            )
+            index = event["index"]
+            segment = DemoSegment(0, index, index, trace, event["bindings"])
+            env = StackBackend(3, move_controller="planner")
+            try:
+                for mode in ("reset", "replay"):
+                    with self.subTest(mode=mode):
+                        observation = reset_segment(env, segment, mode=mode)
+                        np.testing.assert_allclose(
+                            observation, trace.states[index], atol=1e-5, rtol=0
+                        )
+                        self.assertEqual(
+                            env.held_box_id,
+                            int(trace.snapshots[index].arrays["adapter/held"]),
+                        )
+                        # Contact impulses are rebuilt by simulation, not by
+                        # restoring actor/drive state. Replay rebuilds them.
+                        if mode == "replay":
+                            self.assertTrue(env.gripper_ready(False, env.held_box_id))
+            finally:
+                env.close()
 
 
 if __name__ == "__main__":

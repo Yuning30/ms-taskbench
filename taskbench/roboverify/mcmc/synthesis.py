@@ -173,9 +173,15 @@ def preserved_global_rng():
         random.setstate(py_state)
 
 
-def make_roboverify_env(task, num_blocks=3):
+def make_roboverify_env(
+    task, num_blocks=3, *, move_controller="delta", planner_step_limit=200
+):
     if task != "stack":
         raise ValueError("The ManiSkill backend currently supports Stack only")
     from taskbench.roboverify.backend import StackBackend
 
-    return StackBackend(num_blocks=num_blocks)
+    return StackBackend(
+        num_blocks=num_blocks,
+        move_controller=move_controller,
+        planner_step_limit=planner_step_limit,
+    )

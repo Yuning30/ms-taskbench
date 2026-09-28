@@ -7,6 +7,8 @@ run:
     mode: full
     synthesis_approach: id-first
     num_blocks: 3
+    move_controller: delta
+    planner_step_limit: 200
     slots: 5
     iterations: 20
     refinements: 5
